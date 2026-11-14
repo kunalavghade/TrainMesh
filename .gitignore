@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.trainmesh/
+checkpoints/
+dist/
+bin/
+*.egg-info/
+/trainmesh
+*.log
