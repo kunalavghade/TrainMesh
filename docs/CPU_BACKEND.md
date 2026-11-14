@@ -22,7 +22,25 @@ The doctor should show a PyTorch version, `gloo: true`, and `torchrun` via `pyth
 cat checkpoints/latest/metadata.json
 ```
 
-Tune `execution.processes_per_worker` and `training.batch.per_rank`. The effective global batch is their product with worker count and gradient accumulation. The CLI rejects process counts above the host's logical CPU count to avoid accidental oversubscription.
+Tune `execution.processes_per_worker` and `training.batch.per_rank`. The effective global batch is their product with worker count and gradient accumulation. Gradient accumulation communicates once per optimizer step (`DDP.no_sync`), so raising `gradient_accumulation_steps` cuts gradient traffic proportionally.
+
+Intra-op threads per rank come from `execution.cpu_threads_per_rank`, then `OMP_NUM_THREADS`, then 1. On the reference 12-core Mac, extra threads were slower for small models and at most ~7% faster at hidden=4096. Raise the value only after measuring with `trainmesh benchmark`. The CLI rejects configurations where ranks, or ranks × threads, exceed the logical CPU count.
+
+## Checkpoints
+
+Format v2 writes these files, and nothing is pickled:
+- `model.safetensors`
+- `optimizer.safetensors`
+- `rng.safetensors` (one torch RNG state per rank)
+- `state.json`
+- `metadata.json`, with a SHA-256 for every other file
+
+Resume checks every hash, the world size and the training shape before loading anything. Old v1 `checkpoint.pt` files are refused, because loading them would unpickle arbitrary objects.
+
+## Config changes in 0.2
+
+- The top-level `optimizer:` block is now `planner:`, and the results file is `run.results_path`. The old key still loads with a deprecation warning.
+- New `execution.cpu_threads_per_rank` setting (0 = default).
 
 ## Supported config subset
 

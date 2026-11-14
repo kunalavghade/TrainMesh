@@ -2,9 +2,12 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -15,7 +18,13 @@ const (
 	runtimeModule = "trainmesh_runtime"
 	// DefaultGracePeriod is how long ranks get to exit after SIGTERM before SIGKILL.
 	DefaultGracePeriod = 10 * time.Second
+	// maxPortAttempts bounds relaunches when another process grabs the chosen rendezvous port.
+	maxPortAttempts = 3
+	masterAddr      = "127.0.0.1"
 )
+
+// portConflictMarker is how c10d reports a rendezvous port taken between selection and bind.
+var portConflictMarker = []byte("address already in use")
 
 // loopbackInterfaceByOS pins Gloo to loopback for single-host jobs where auto-detection misbehaves.
 var loopbackInterfaceByOS = map[string]string{"darwin": "lo0"}
@@ -28,12 +37,14 @@ type Spec struct {
 	LocalRanks     int      // processes on this host
 	ThreadsPerRank int      // intra-op CPU threads per rank
 	ExtraArgs      []string // forwarded to the runtime, e.g. --resume, --output
+	MasterPort     int      // static rendezvous port; set by Run for multi-rank jobs
 	Stdout         io.Writer
 	Stderr         io.Writer
 	GracePeriod    time.Duration
 }
 
-// Args builds the interpreter arguments; torchrun --standalone binds its own free port.
+// Args builds the interpreter arguments. Static rendezvous is used instead of --standalone
+// because the c10d rendezvous store ignores USE_LIBUV=0 and fails on macOS.
 func (s Spec) Args() []string {
 	runtimeArgs := append([]string{"-m", runtimeModule, "--config", s.ConfigPath}, s.ExtraArgs...)
 	if s.LocalRanks <= 1 {
@@ -41,9 +52,11 @@ func (s Spec) Args() []string {
 	}
 	torchrun := []string{
 		"-m", "torch.distributed.run",
-		"--standalone",
 		"--nnodes=1",
-		"--nproc-per-node=" + strconv.Itoa(s.LocalRanks),
+		"--node_rank=0",
+		"--nproc_per_node=" + strconv.Itoa(s.LocalRanks),
+		"--master_addr=" + masterAddr,
+		"--master_port=" + strconv.Itoa(s.MasterPort),
 	}
 	return append(torchrun, runtimeArgs...)
 }
@@ -66,28 +79,90 @@ func (s Spec) Env(base []string, goos string) []string {
 	return env
 }
 
-// ResolveThreadsPerRank picks threads: explicit config, then OMP_NUM_THREADS, then an even split.
-func ResolveThreadsPerRank(configured int, ompEnv string, logicalCPUs, localRanks int) int {
+// DefaultThreadsPerRank matches torchrun's default. On the reference 12-core host more intra-op
+// threads were 5-10% slower for small models and at most ~7% faster at hidden=4096.
+const DefaultThreadsPerRank = 1
+
+// ResolveThreadsPerRank picks threads: explicit config, then OMP_NUM_THREADS, then the default.
+func ResolveThreadsPerRank(configured int, ompEnv string) int {
 	if configured > 0 {
 		return configured
 	}
 	if n, err := strconv.Atoi(strings.TrimSpace(ompEnv)); err == nil && n > 0 {
 		return n
 	}
-	return max(1, logicalCPUs/max(1, localRanks))
+	return DefaultThreadsPerRank
 }
 
-// Run starts the runtime and supervises it until it exits or ctx is cancelled.
+// Run starts the runtime and supervises it until it exits or ctx is cancelled. A multi-rank
+// launch whose rendezvous port was taken before torchrun bound it is retried on a new port.
 func Run(ctx context.Context, s Spec, base []string, goos string) error {
-	cmd := exec.Command(s.Python, s.Args()...)
-	cmd.Stdout = s.Stdout
-	cmd.Stderr = s.Stderr
-	cmd.Env = s.Env(base, goos)
 	grace := s.GracePeriod
 	if grace <= 0 {
 		grace = DefaultGracePeriod
 	}
-	return supervise(ctx, cmd, grace)
+	if s.LocalRanks <= 1 {
+		return supervise(ctx, s.command(base, goos, s.Stderr), grace)
+	}
+
+	var err error
+	for attempt := 1; attempt <= maxPortAttempts; attempt++ {
+		if s.MasterPort, err = freeLoopbackPort(); err != nil {
+			return err
+		}
+		detector := &conflictDetector{target: s.Stderr, marker: portConflictMarker}
+		err = supervise(ctx, s.command(base, goos, detector), grace)
+		if err == nil || ctx.Err() != nil || !detector.seen {
+			return err
+		}
+		fmt.Fprintf(s.Stderr, "trainmesh: rendezvous port %d was taken (attempt %d/%d), retrying\n", s.MasterPort, attempt, maxPortAttempts)
+	}
+	return fmt.Errorf("%w after %d attempts: %w", ErrRendezvousPortUnavailable, maxPortAttempts, err)
+}
+
+// ErrRendezvousPortUnavailable means every chosen rendezvous port was taken before bind.
+var ErrRendezvousPortUnavailable = errors.New("no free rendezvous port")
+
+func (s Spec) command(base []string, goos string, stderr io.Writer) *exec.Cmd {
+	cmd := exec.Command(s.Python, s.Args()...)
+	cmd.Stdout = s.Stdout
+	cmd.Stderr = stderr
+	cmd.Env = s.Env(base, goos)
+	return cmd
+}
+
+func freeLoopbackPort() (int, error) {
+	listener, err := net.Listen("tcp", masterAddr+":0")
+	if err != nil {
+		return 0, fmt.Errorf("selecting rendezvous port: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		return 0, fmt.Errorf("releasing probe listener: %w", err)
+	}
+	return port, nil
+}
+
+// conflictDetector forwards output and records whether marker appeared in it.
+type conflictDetector struct {
+	target io.Writer
+	marker []byte
+	tail   []byte
+	seen   bool
+}
+
+func (d *conflictDetector) Write(p []byte) (int, error) {
+	if !d.seen {
+		// Keep a short tail so a marker split across writes is still found.
+		window := append(d.tail, bytes.ToLower(p)...)
+		d.seen = bytes.Contains(window, d.marker)
+		keep := min(len(window), len(d.marker))
+		d.tail = append(d.tail[:0], window[len(window)-keep:]...)
+	}
+	if d.target == nil {
+		return len(p), nil
+	}
+	return d.target.Write(p)
 }
 
 // supervise runs cmd in its own process group so cancellation reaches every rank, not only torchrun.

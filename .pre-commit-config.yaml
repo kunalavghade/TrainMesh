@@ -1,0 +1,25 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: sh -c 'test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }'
+        language: system
+        files: \.go$
+        pass_filenames: false
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        files: \.go$
+        pass_filenames: false
+      - id: ruff
+        name: ruff
+        entry: .venv/bin/ruff check
+        language: system
+        types: [python]
+      - id: black
+        name: black
+        entry: .venv/bin/black --check
+        language: system
+        types: [python]
