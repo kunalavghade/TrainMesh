@@ -1,19 +1,45 @@
+"""CPU/Gloo data-parallel trainer: builds the job from config and runs the epoch loop."""
+
 from __future__ import annotations
 
-import json
+import contextlib
 import hashlib
+import json
+import logging
 import os
 import random
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
-import torch.distributed as dist
-import yaml
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler, TensorDataset
+
+from .checkpoint import Progress, load_checkpoint, save_checkpoint
+from .config import TrainingSettings, load_config, training_settings
+from .distributed import (
+    DistContext,
+    all_reduce_sum_,
+    assert_replicas_identical,
+    barrier,
+    context_from_env,
+    destroy_process_group,
+    init_process_group,
+    max_across_ranks,
+)
+
+__all__ = ["MLP", "EpochStats", "load_config", "train", "train_epoch"]
+
+logger = logging.getLogger(__name__)
+
+OPTIMIZER_FACTORIES: dict[str, type[torch.optim.Optimizer]] = {
+    "adam": torch.optim.Adam,
+    "sgd": torch.optim.SGD,
+}
+LATEST_CHECKPOINT = "latest"
 
 
 class MLP(nn.Module):
@@ -27,219 +53,216 @@ class MLP(nn.Module):
         return self.net(x)
 
 
-def load_config(path: str | Path) -> dict[str, Any]:
-    with Path(path).open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if not isinstance(config, dict) or config.get("version") != 1:
-        raise ValueError("configuration must be a YAML mapping with version: 1")
-    execution = config.get("execution", {})
-    if execution.get("strategy") != "data_parallel":
-        raise ValueError("only execution.strategy=data_parallel is implemented")
-    backend = execution.get("backend", {})
-    if backend.get("device", "cpu") != "cpu" or backend.get("communication", "gloo") != "gloo":
-        raise ValueError("this release supports CPU with Gloo only; CUDA/NCCL is not available")
-    training = config.get("training", {})
-    if training.get("precision", "fp32") != "fp32":
-        raise ValueError("only fp32 precision is currently supported")
-    if training.get("dataset", {}).get("type") != "synthetic":
-        raise ValueError("only deterministic synthetic datasets are supported")
-    batch = training.get("batch", {})
-    if int(batch.get("per_rank", 0)) <= 0 or int(batch.get("gradient_accumulation_steps", 1)) <= 0:
-        raise ValueError("training.batch.per_rank and gradient_accumulation_steps must be positive")
-    if int(training.get("epochs", 0)) <= 0:
-        raise ValueError("training.epochs must be positive")
-    return config
+@dataclass(frozen=True, slots=True)
+class EpochStats:
+    loss_sum: torch.Tensor  # stays a tensor so the loop never forces a host sync
+    samples: int
+    optimizer_steps: int
 
 
-def _max_across_ranks(value: float, world_size: int, device: torch.device) -> float:
-    tensor = torch.tensor([value], dtype=torch.float64, device=device)
-    if world_size > 1:
-        dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
-    return float(tensor.item())
+def train(
+    config_path: str, output_path: str | None = None, resume_path: str | None = None
+) -> dict[str, Any]:
+    config = load_config(config_path)
+    settings = training_settings(config)
+    ctx = context_from_env()
+    init_process_group(ctx)
+    try:
+        resume = resume_path or config.get("run", {}).get("resume")
+        result = _run_job(config, settings, ctx, resume_path=resume)
+        _write_results(result, output_path or settings.results_path, ctx)
+        barrier(ctx)
+        return result
+    finally:
+        destroy_process_group()
 
 
-def _model_digest(model: nn.Module) -> str:
+def train_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    *,
+    accumulation_steps: int,
+) -> EpochStats:
+    """Run one epoch; DDP all-reduces only on the micro-batch that closes a window."""
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+    loss_sum = torch.zeros((), dtype=torch.float64)
+    samples = pending = optimizer_steps = 0
+    last_index = len(loader) - 1
+
+    for batch_index, (features, target) in enumerate(loader):
+        pending += 1
+        closes_window = pending == accumulation_steps or batch_index == last_index
+        defers_sync = isinstance(model, DistributedDataParallel) and not closes_window
+        with model.no_sync() if defers_sync else contextlib.nullcontext():
+            loss = criterion(model(features), target)
+            (loss / (len(target) * accumulation_steps)).backward()
+        if closes_window:
+            _rescale_partial_window(model, pending, accumulation_steps)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            optimizer_steps += 1
+            pending = 0
+        loss_sum += loss.detach()
+        samples += len(target)
+
+    return EpochStats(loss_sum=loss_sum, samples=samples, optimizer_steps=optimizer_steps)
+
+
+def configure_threads(ctx: DistContext) -> int:
+    configured = os.environ.get("OMP_NUM_THREADS", "")
+    threads = int(configured) if configured else max(1, (os.cpu_count() or 1) // ctx.local_world_size)
+    torch.set_num_threads(max(1, threads))
+    return torch.get_num_threads()
+
+
+def build_loader(
+    settings: TrainingSettings, ctx: DistContext
+) -> tuple[DataLoader, DistributedSampler | None]:
+    # Identical deterministic dataset on every rank; DistributedSampler assigns disjoint indices.
+    generator = torch.Generator().manual_seed(settings.seed + 1)
+    features = torch.randn(settings.samples, settings.input_size, generator=generator)
+    target = torch.randint(settings.output_size, (settings.samples,), generator=generator)
+    dataset = TensorDataset(features, target)
+    sampler = (
+        DistributedSampler(
+            dataset, num_replicas=ctx.world_size, rank=ctx.rank, shuffle=True, seed=settings.seed
+        )
+        if ctx.is_distributed
+        else None
+    )
+    loader = DataLoader(
+        dataset, batch_size=settings.per_rank_batch, sampler=sampler, shuffle=sampler is None
+    )
+    return loader, sampler
+
+
+def build_model(settings: TrainingSettings, ctx: DistContext) -> nn.Module:
+    model = MLP(settings.input_size, settings.hidden_size, settings.output_size)
+    return DistributedDataParallel(model) if ctx.is_distributed else model
+
+
+def build_optimizer(model: nn.Module, settings: TrainingSettings) -> torch.optim.Optimizer:
+    return OPTIMIZER_FACTORIES[settings.optimizer_name](
+        model.parameters(), lr=settings.learning_rate
+    )
+
+
+def unwrap(model: nn.Module) -> nn.Module:
+    return model.module if isinstance(model, DistributedDataParallel) else model
+
+
+def model_digest(model: nn.Module) -> str:
     digest = hashlib.sha256()
-    bare_model = model.module if isinstance(model, DistributedDataParallel) else model
-    for name, tensor in sorted(bare_model.state_dict().items()):
+    for name, tensor in sorted(unwrap(model).state_dict().items()):
         digest.update(name.encode("utf-8"))
         digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
     return digest.hexdigest()
 
 
-def _save_checkpoint(
-    destination: Path, model: nn.Module, optimizer: torch.optim.Optimizer,
-    epoch: int, step: int, config: dict[str, Any], seed: int,
-) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
-    bare_model = model.module if isinstance(model, DistributedDataParallel) else model
-    temporary = destination / ".checkpoint.tmp"
-    torch.save(
-        {
-            "model": bare_model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "epoch": epoch,
-            "global_step": step,
-            "torch_rng_state": torch.get_rng_state(),
-            "python_rng_state": random.getstate(),
-            "seed": seed,
-            "config": config,
-        },
-        temporary,
-    )
-    temporary.replace(destination / "checkpoint.pt")
-    summary = {
-        "version": 1,
-        "epoch": epoch,
-        "global_step": step,
-        "world_size": dist.get_world_size() if dist.is_initialized() else 1,
-        "saved_at_unix": time.time(),
-        "dataset": config["training"]["dataset"],
-    }
-    digest = hashlib.sha256((destination / "checkpoint.pt").read_bytes()).hexdigest()
-    summary["checkpoint_sha256"] = digest
-    (destination / "metadata.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-
-
-def train(config_path: str, output_path: str | None = None, resume_path: str | None = None) -> dict[str, Any]:
-    config = load_config(config_path)
-    if resume_path:
-        config.setdefault("run", {})["resume"] = resume_path
-    rank = int(os.environ.get("RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    if world_size > 1:
-        if not dist.is_available() or not dist.is_gloo_available():
-            raise RuntimeError("installed PyTorch does not provide the Gloo process-group backend")
-        dist.init_process_group(backend="gloo", init_method="env://")
-
-    seed = int(config.get("run", {}).get("seed", 42))
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.set_num_threads(max(1, int(os.environ.get("OMP_NUM_THREADS", "1"))))
-
-    training = config["training"]
-    model_config = training.get("model", {})
-    dataset_config = training["dataset"]
-    count = int(dataset_config.get("samples", 4096))
-    input_size = int(model_config.get("input_size", dataset_config.get("input_size", 32)))
-    hidden_size = int(model_config.get("hidden_size", 64))
-    output_size = int(model_config.get("output_size", dataset_config.get("output_size", 4)))
-    # Identical deterministic dataset on every rank; DistributedSampler assigns disjoint indices.
-    generator = torch.Generator().manual_seed(seed + 1)
-    features = torch.randn(count, input_size, generator=generator)
-    target = torch.randint(output_size, (count,), generator=generator)
-    dataset = TensorDataset(features, target)
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed) if world_size > 1 else None
-    batch_size = int(training["batch"]["per_rank"])
-    loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, shuffle=sampler is None)
-
-    model = MLP(input_size, hidden_size, output_size)
-    if world_size > 1:
-        model = DistributedDataParallel(model)
-    optimizer_config = training.get("optimizer", {})
-    optimizer_name = str(optimizer_config.get("name", "adam")).lower()
-    learning_rate = float(optimizer_config.get("learning_rate", 0.001))
-    if optimizer_name == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    elif optimizer_name == "sgd":
-        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-    else:
-        raise ValueError(f"unsupported optimizer: {optimizer_name}")
+def _run_job(
+    config: dict[str, Any],
+    settings: TrainingSettings,
+    ctx: DistContext,
+    *,
+    resume_path: str | None,
+) -> dict[str, Any]:
+    random.seed(settings.seed)
+    torch.manual_seed(settings.seed)
+    threads = configure_threads(ctx)
+    loader, sampler = build_loader(settings, ctx)
+    model = build_model(settings, ctx)
+    optimizer = build_optimizer(model, settings)
     criterion = nn.CrossEntropyLoss(reduction="sum")
 
-    resume = config.get("run", {}).get("resume")
-    start_epoch, global_step = 0, 0
-    if resume:
-        checkpoint_path = Path(resume) / "checkpoint.pt"
-        metadata_path = Path(resume) / "metadata.json"
-        if not checkpoint_path.is_file() or not metadata_path.is_file():
-            raise ValueError(f"checkpoint is incomplete: expected {checkpoint_path} and metadata.json")
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        actual_digest = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
-        if metadata.get("checkpoint_sha256") != actual_digest:
-            raise ValueError("checkpoint checksum mismatch; refusing to resume corrupted state")
-        if int(metadata.get("world_size", -1)) != world_size:
-            raise ValueError("checkpoint world size does not match this run; change membership through a planned restart")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        saved_training = checkpoint.get("config", {}).get("training", {})
-        for key in ("model", "dataset", "batch", "optimizer"):
-            if saved_training.get(key) != training.get(key):
-                raise ValueError(f"checkpoint training.{key} differs from current configuration")
-        base = model.module if isinstance(model, DistributedDataParallel) else model
-        base.load_state_dict(checkpoint["model"])
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        start_epoch = int(checkpoint["epoch"])
-        global_step = int(checkpoint["global_step"])
-        torch.set_rng_state(checkpoint["torch_rng_state"])
-        random.setstate(checkpoint["python_rng_state"])
+    progress = Progress(epoch=0, global_step=0)
+    if resume_path:
+        progress = load_checkpoint(
+            Path(resume_path),
+            model=unwrap(model),
+            optimizer=optimizer,
+            training_config=config["training"],
+            ctx=ctx,
+        )
+    start_epoch = progress.epoch
 
     started = time.perf_counter()
     epoch_losses: list[float] = []
-    for epoch in range(start_epoch, int(training["epochs"])):
+    processed_samples = 0
+    for epoch in range(start_epoch, settings.epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)
-        model.train()
-        loss_sum, samples = 0.0, 0
-        accumulation = int(training["batch"].get("gradient_accumulation_steps", 1))
-        optimizer.zero_grad(set_to_none=True)
-        pending = 0
-        for batch_index, (x, y) in enumerate(loader):
-            logits = model(x)
-            loss = criterion(logits, y)
-            (loss / (len(y) * accumulation)).backward()
-            pending += 1
-            if pending == accumulation or batch_index == len(loader) - 1:
-                if pending < accumulation:
-                    correction = accumulation / pending
-                    for parameter in model.parameters():
-                        if parameter.grad is not None:
-                            parameter.grad.mul_(correction)
-                optimizer.step()
-                global_step += 1
-                optimizer.zero_grad(set_to_none=True)
-                pending = 0
-            loss_sum += float(loss.detach().item())
-            samples += len(y)
-        totals = torch.tensor([loss_sum, samples], dtype=torch.float64)
-        if world_size > 1:
-            dist.all_reduce(totals, op=dist.ReduceOp.SUM)
-        epoch_loss = float(totals[0] / max(1, totals[1]))
+        stats = train_epoch(
+            model, loader, optimizer, criterion, accumulation_steps=settings.accumulation_steps
+        )
+        totals = torch.stack([stats.loss_sum, torch.tensor(stats.samples, dtype=torch.float64)])
+        all_reduce_sum_(totals, ctx)
+        loss_total, sample_total = totals.tolist()
+        epoch_loss = loss_total / max(1.0, sample_total)
         epoch_losses.append(epoch_loss)
-        if rank == 0:
-            print(json.dumps({"event": "epoch", "epoch": epoch + 1, "loss": epoch_loss, "samples": int(totals[1]), "world_size": world_size}), flush=True)
-        ckpt = training.get("checkpoint", {})
-        if ckpt.get("enabled", True) and rank == 0:
-            checkpoint_dir = Path(ckpt.get("directory", "./checkpoints"))
-            _save_checkpoint(checkpoint_dir / "latest", model, optimizer, epoch + 1, global_step, config, seed)
+        processed_samples += int(sample_total)
+        progress = Progress(epoch=epoch + 1, global_step=progress.global_step + stats.optimizer_steps)
+        if ctx.is_primary:
+            _emit_event(
+                {
+                    "event": "epoch",
+                    "epoch": epoch + 1,
+                    "loss": epoch_loss,
+                    "samples": int(sample_total),
+                    "world_size": ctx.world_size,
+                }
+            )
+        if settings.checkpoint_enabled:
+            save_checkpoint(
+                settings.checkpoint_directory / LATEST_CHECKPOINT,
+                model=unwrap(model),
+                optimizer=optimizer,
+                progress=progress,
+                config=config,
+                seed=settings.seed,
+                ctx=ctx,
+            )
 
-    elapsed = time.perf_counter() - started
-    elapsed = _max_across_ranks(elapsed, world_size, torch.device("cpu"))
-    digest = _model_digest(model)
-    if world_size > 1:
-        digests: list[str | None] = [None] * world_size
-        dist.all_gather_object(digests, digest)
-        if len(set(digests)) != 1:
-            raise RuntimeError(f"DDP model parameters diverged across ranks: {digests}")
-    result = {
-        "world_size": world_size,
-        "rank": rank,
-        "local_rank": local_rank,
-        "epochs": int(training["epochs"]) - start_epoch,
-        "global_step": global_step,
+    elapsed = max_across_ranks(time.perf_counter() - started, ctx)
+    digest = model_digest(model)
+    assert_replicas_identical(digest, ctx)
+    return {
+        "world_size": ctx.world_size,
+        "rank": ctx.rank,
+        "local_rank": ctx.local_rank,
+        "threads_per_rank": threads,
+        "epochs": settings.epochs - start_epoch,
+        "global_step": progress.global_step,
         "final_loss": epoch_losses[-1] if epoch_losses else None,
         "epoch_losses": epoch_losses,
+        "samples_processed": processed_samples,
         "duration_seconds": elapsed,
-        "samples_per_second": (count * max(0, int(training["epochs"]) - start_epoch)) / max(elapsed, 1e-9),
+        "samples_per_second": processed_samples / max(elapsed, 1e-9),
         "model_sha256": digest,
         "parameters_consistent": True,
     }
-    destination = output_path or config.get("optimizer", {}).get("results", "")
-    if rank == 0 and destination:
-        path = Path(destination)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    if world_size > 1:
-        dist.barrier()
-        dist.destroy_process_group()
-    return result
+
+
+def _rescale_partial_window(model: nn.Module, pending: int, accumulation_steps: int) -> None:
+    # Losses were divided by the full window; a short final window needs scaling back up.
+    if pending == accumulation_steps:
+        return
+    correction = accumulation_steps / pending
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            parameter.grad.mul_(correction)
+
+
+def _write_results(result: dict[str, Any], destination: str, ctx: DistContext) -> None:
+    if not ctx.is_primary or not destination:
+        return
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+
+
+def _emit_event(payload: dict[str, Any]) -> None:
+    # stdout JSON lines are the runtime's event protocol for the Go launcher.
+    print(json.dumps(payload), flush=True)
