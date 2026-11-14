@@ -8,7 +8,11 @@ Updated 2026-11-14.
 | YAML config validation and effective batch calculation | Implemented | `internal/config`; Go unit tests |
 | Real local CPU DDP/Gloo training | Implemented and executed | `python/trainmesh_runtime/runtime.py`; two local ranks completed three epochs on macOS CPU/Gloo |
 | DistributedSampler, model gradient sync, loss aggregation | Implemented and tested | Two-rank Gloo test asserts a shared world size, equal post-training model hashes, sample-weighted loss, and successful checkpoint resume |
-| Local checkpoint/resume | Implemented for single-host jobs | Rank-zero model/optimizer and RNG state, SHA-256 integrity check, world-size and training-shape compatibility checks; recovery across worker failure remains unimplemented |
+| Local checkpoint/resume | Implemented for single-host jobs | Format v2: safetensors + JSON (no pickle), streamed SHA-256 per file, per-rank RNG state, world-size and training-shape checks; v1 pickle checkpoints refused. Writes are synchronous; recovery across worker failure remains unimplemented |
+| Gradient accumulation traffic | Implemented and tested | `DDP.no_sync` on non-final micro-batches; `python/tests/test_accumulation.py` counts all-reduces with a comm hook and checks equivalence with one large batch |
+| Launcher process lifecycle | Implemented and tested | `internal/launcher`: ranks run in their own process group; Ctrl-C/SIGTERM → SIGTERM to the group → SIGKILL after a grace period; bounded retry when the rendezvous port is taken |
+| Lint and CI | Configured | `.github/workflows/ci.yml` (Go + Python on Linux and macOS), `.golangci.yml`, ruff + black, `.pre-commit-config.yaml`; `make lint` runs them locally |
+| Single config schema (protobuf) | Not implemented | Needs `protoc`/`buf`; Go and Python validators are still separate |
 | Local benchmark JSON | Implemented and measured | `benchmark-results/local-two-rank.json`; one local smoke run, not a comparative benchmark |
 | Cluster identity and local status | Implemented | `.trainmesh/cluster.json`; no worker registry |
 | Enrollment, authenticated agent, heartbeats, revocation | Not implemented | No remote execution surface is exposed |

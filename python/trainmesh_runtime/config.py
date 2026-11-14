@@ -97,7 +97,9 @@ def _validate(config: dict[str, Any]) -> None:
         raise ConfigError("only deterministic synthetic datasets are supported")
     batch = training.get("batch", {})
     if int(batch.get("per_rank", 0)) <= 0 or int(batch.get("gradient_accumulation_steps", 1)) <= 0:
-        raise ConfigError("training.batch.per_rank and gradient_accumulation_steps must be positive")
+        raise ConfigError(
+            "training.batch.per_rank and gradient_accumulation_steps must be positive"
+        )
     if int(training.get("epochs", 0)) <= 0:
         raise ConfigError("training.epochs must be positive")
     optimizer_name = str(training.get("optimizer", {}).get("name", "adam")).lower()

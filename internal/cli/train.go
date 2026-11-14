@@ -97,6 +97,10 @@ func launchTraining(cmd *cobra.Command, configPath string, extraArgs []string) e
 	if localRanks > h.logicalCPUs {
 		return fmt.Errorf("requested %d local processes on %d logical CPUs; reduce processes_per_worker to avoid CPU oversubscription", localRanks, h.logicalCPUs)
 	}
+	threads := threadsPerRank(c, h)
+	if localRanks*threads > h.logicalCPUs {
+		return fmt.Errorf("%d ranks x %d threads exceeds %d logical CPUs; lower execution.cpu_threads_per_rank", localRanks, threads, h.logicalCPUs)
+	}
 	rt, err := launcher.DiscoverRuntime(h.getenv, h.cwd, h.execDir)
 	if err != nil {
 		return err
@@ -111,7 +115,7 @@ func launchTraining(cmd *cobra.Command, configPath string, extraArgs []string) e
 		RuntimeDir:     rt.RuntimeDir,
 		ConfigPath:     absConfig,
 		LocalRanks:     localRanks,
-		ThreadsPerRank: threadsPerRank(c, h),
+		ThreadsPerRank: threads,
 		ExtraArgs:      extraArgs,
 		Stdout:         cmd.OutOrStdout(),
 		Stderr:         cmd.ErrOrStderr(),
@@ -133,5 +137,5 @@ func loadConfig(cmd *cobra.Command, path string) (config.Config, error) {
 }
 
 func threadsPerRank(c config.Config, h host) int {
-	return launcher.ResolveThreadsPerRank(c.Execution.CPUThreadsPerRank, h.getenv("OMP_NUM_THREADS"), h.logicalCPUs, c.Execution.ProcessesPerWorker)
+	return launcher.ResolveThreadsPerRank(c.Execution.CPUThreadsPerRank, h.getenv("OMP_NUM_THREADS"))
 }

@@ -113,7 +113,7 @@ Severity: **P0** = blocks performance or safety of the mesh; **P1** = correctnes
 | Sev | Location | Problem | Why it matters on a mesh |
 |-----|----------|---------|--------------------------|
 | P0 | `python/trainmesh_runtime/runtime.py:187-201` | Gradient accumulation calls `backward()` on every micro-batch inside DDP without `model.no_sync()`. DDP all-reduces gradients on **every** micro-batch, not once per optimizer step. | With `accumulation=8` this sends 8× the necessary traffic. On a 1 Gbps or internet link, that's the difference between usable and unusable. |
-| P0 | `cmd/trainmesh/main.go:132,176` + `runtime.py:119` | Forces `OMP_NUM_THREADS=1` and `torch.set_num_threads(1)`. | Each CPU rank uses one core. A 16-core PC runs at a fraction of its capacity. Threads should be `physical_cores / local_ranks`. |
+| P2 | `cmd/trainmesh/main.go:132,176` + `runtime.py:119` | Forces `OMP_NUM_THREADS=1` with no way to change it. | **Corrected after measurement (Phase 0):** on a 12-core Apple Silicon host, 3–6 threads per rank were 5–10% *slower* for small MLPs and at most ~7% faster at hidden=4096, so 1 thread is a sound default. The real gap is that it couldn't be tuned; it now can via `execution.cpu_threads_per_rank` or `OMP_NUM_THREADS`. Idle cores are better used with more ranks or bigger per-rank work. |
 | P0 | `runtime.py:133` | `DistributedSampler` gives every rank the same number of samples. | In a heterogeneous mesh, the slowest PC sets the pace for everyone. Batches must be sized by measured throughput (§5.6). |
 | P1 | `runtime.py:202` | `loss.detach().item()` every step. | Forces a device → host sync each step. On GPU this serialises the CUDA stream and kills compute/comm overlap. Accumulate on device; read once per log interval. |
 | P1 | `runtime.py:135` | `DataLoader` with `num_workers=0`, no `pin_memory`, no prefetch. | Data loading runs on the training thread. Real datasets will stall GPUs. |
@@ -509,8 +509,8 @@ peer suspect.
   `max_memory_bytes()`, and `stage_to_host(tensor)`.
 - **Performance defaults**: `torch.compile` where supported; AMP (bf16 on Ampere+/RDNA3/CPU with
   AMX, fp16 on MPS / older GPUs); fused optimizers; gradient accumulation under `no_sync()`; metrics
-  accumulated on device and read every `log_interval` steps; CPU threads =
-  `physical_cores / local_workers`.
+  accumulated on device and read every `log_interval` steps; CPU threads per rank chosen from
+  measurements by the profiler/pilot (default 1, see §2.3).
 - **Models** (`models/`): Hugging Face `transformers` / PEFT loaders plus user plugins registered
   by entry point.
 - **Strategies** (`strategies/`): `ddp`, `fsdp`, `pipeline`, `diloco`, and `lora`, composable
@@ -639,7 +639,7 @@ Version 1 configs stay loadable (mapped onto v2 by the CLI) during a transition 
 | NVIDIA GPU | CUDA | **NCCL** | bf16 on Ampere and newer, fp16 + loss scaling on older | Best-supported path. Multi-GPU in one box = one island. |
 | AMD GPU | ROCm (exposed as `cuda` device in PyTorch) | **RCCL** (via PyTorch's `nccl` backend name on ROCm builds) | bf16 where the card supports it | Official ROCm support for consumer Radeon cards is limited and Linux-first. The profiler must verify, not assume. |
 | Apple Silicon | MPS | **Gloo on CPU-staged tensors** (no MPS distributed backend) | fp16 (bf16 only where the macOS/PyTorch version supports it per op) | Unified memory makes staging cheap. MPS op coverage gaps need a CPU fallback (`PYTORCH_ENABLE_MPS_FALLBACK=1`) with a warning in metrics. |
-| CPU (x86 / ARM) | ATen + oneDNN | **Gloo** | fp32; bf16 on CPUs with AMX/AVX512-BF16 | Threads = physical cores ÷ local workers (not 1). Best used for small models or as DiLoCo replicas. |
+| CPU (x86 / ARM) | ATen + oneDNN | **Gloo** | fp32; bf16 on CPUs with AMX/AVX512-BF16 | Threads per rank are measured, not assumed (default 1; extra threads helped little in Phase 0 measurements). Best used for small models or as DiLoCo replicas. |
 | Any device, across islands | — | **`tmcomm`** | Compressed (bf16/int8/int4) | Works between any combination above. |
 
 ---
@@ -750,10 +750,26 @@ Conventions: Go tests next to source (`*_test.go`, table-driven); Rust unit test
 
 Do these first (Phase 0), even before the mesh work, because they carry over.
 
+**Phase 0 status (2026-11-14):** everything below is done except two items:
+- The protobuf schema. It needs a `protoc`/`buf` toolchain, so the Python validator still
+  duplicates the Go one.
+- Async checkpoint writes, which moved to P5.
+
+Evidence:
+- `python/tests/test_accumulation.py` fails without `no_sync` (8 all-reduces instead of 2) and
+  passes with it.
+- Checkpoints are safetensors + JSON, with a SHA-256 per file and per-rank RNG state.
+- On Ctrl-C the launcher kills the whole rank process group (`internal/launcher/procgroup_unix_test.go`).
+- Throughput on the reference host matches the pre-refactor baseline within run-to-run noise
+  (≈ 101k–129k vs 116k samples/s, identical loss).
+
+`torchrun --standalone` was tried for the port race and rejected: its c10d store ignores
+`USE_LIBUV=0` and hangs on macOS. The launcher instead retries on a new port (max 3 attempts).
+
 | Pri | File | Change |
 |-----|------|--------|
 | P0 | `python/trainmesh_runtime/runtime.py:187-201` | Wrap non-final micro-batches in `model.no_sync()` so DDP communicates once per optimizer step. Add a test that counts all-reduce calls with a comm hook. |
-| P0 | `cmd/trainmesh/main.go:132,176`, `runtime.py:119` | Remove forced `OMP_NUM_THREADS=1`. Compute threads as `physical_cores // local_ranks` (config override `execution.cpu_threads_per_rank`). |
+| P2 | `cmd/trainmesh/main.go:132,176`, `runtime.py:119` | Make threads per rank configurable (`execution.cpu_threads_per_rank`, then `OMP_NUM_THREADS`), default 1 (measured, see §2.3). Reject ranks × threads above the logical CPU count. |
 | P0 | `runtime.py:76-90,164` | Save model/optimizer as safetensors + JSON metadata; load without unpickling. Reject `weights_only=False`. |
 | P1 | `runtime.py:202` | Accumulate loss and sample count as device tensors; `.item()` only at epoch end / log interval. |
 | P1 | `runtime.py:99,159` | Stream-hash checkpoints in 8 MB chunks. |
@@ -794,7 +810,7 @@ Durations are planning placeholders; adjust to available time.
 
 | Phase | Scope | Acceptance criteria |
 |-------|-------|---------------------|
-| **P0 — Cleanup & correctness** | §9 fix list, git + CI, proto schema v1, config v2 parser with v1 compatibility | `no_sync` test proves 1 all-reduce per optimizer step; CPU throughput improves vs the current baseline (numbers recorded); no pickle loads; Go/Python lint + tests green in CI. |
+| **P0 — Cleanup & correctness** | §9 fix list, git + CI, proto schema v1, config v2 parser with v1 compatibility | `no_sync` test proves 1 all-reduce per optimizer step; no throughput regression vs the current baseline (numbers recorded); no pickle loads; Go/Python lint + tests green in CI. |
 | **P1 — LAN mesh** | `meshd`, `tm-agent`, join tokens, mTLS, mDNS, heartbeats, node state machine, agent-launched multi-node torchrun (homogeneous CPU/Gloo, then single-vendor GPU) | Two physical machines join with one command each; a 2-node job runs with matching final model hashes; killing one node stops the group cleanly and the coordinator marks it `LOST`; restart resumes from checkpoint. |
 | **P2 — GPU backends + profiler** | Device abstraction (CUDA/ROCm/MPS/CPU), AMP, `torch.compile`, profiler (FLOPs, memory, link matrix), island formation, throughput-proportional batch split | Mixed-speed nodes in one island finish steps within 10% of each other; the profile and island map are visible in `trainmesh status`; the MPS and ROCm paths each run a smoke job. |
 | **P3 — `tmcomm` + DiLoCo** | Rust QUIC transport, int8/bf16 compression with error feedback, hierarchical all-reduce, `ProcessGroupTM` + Python API, DiLoCo strategy, NAT traversal + relay | Three islands (NVIDIA, Apple+CPU, remote) train one model over an emulated 100 Mbps/50 ms WAN (netem) at ≥ 60% compute utilisation; loss tracks the DDP baseline within an agreed tolerance at equal tokens; one island killed mid-run → training continues with quorum. |

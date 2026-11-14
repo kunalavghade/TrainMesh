@@ -1,3 +1,4 @@
+// Command trainmesh is the TrainMesh CLI.
 package main
 
 import (

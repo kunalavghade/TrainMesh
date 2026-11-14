@@ -34,7 +34,7 @@ type Execution struct {
 	Strategy           string `yaml:"strategy" json:"strategy"`
 	Workers            int    `yaml:"workers" json:"workers"`
 	ProcessesPerWorker int    `yaml:"processes_per_worker" json:"processes_per_worker"`
-	// CPUThreadsPerRank pins intra-op threads per rank; 0 means auto.
+	// CPUThreadsPerRank sets intra-op threads per rank; 0 uses OMP_NUM_THREADS or 1.
 	CPUThreadsPerRank int     `yaml:"cpu_threads_per_rank" json:"cpu_threads_per_rank"`
 	Backend           Backend `yaml:"backend" json:"backend"`
 }
@@ -75,7 +75,7 @@ type Checkpoint struct {
 // Load reads, migrates and validates the configuration at path.
 func Load(path string) (Config, error) {
 	var c Config
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- operator-supplied config path
 	if err != nil {
 		return c, fmt.Errorf("reading config %s: %w", path, err)
 	}
@@ -120,7 +120,7 @@ func (c Config) Validate() error {
 		add("execution.workers and processes_per_worker must be positive")
 	}
 	if c.Execution.CPUThreadsPerRank < 0 {
-		add("execution.cpu_threads_per_rank must be 0 (auto) or positive")
+		add("execution.cpu_threads_per_rank must be 0 (default) or positive")
 	}
 	if strings.ToLower(c.Execution.Backend.Device) != "cpu" || strings.ToLower(c.Execution.Backend.Communication) != "gloo" {
 		add("this release supports device=cpu and communication=gloo only")

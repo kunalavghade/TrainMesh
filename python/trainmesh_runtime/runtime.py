@@ -40,6 +40,7 @@ OPTIMIZER_FACTORIES: dict[str, type[torch.optim.Optimizer]] = {
     "sgd": torch.optim.SGD,
 }
 LATEST_CHECKPOINT = "latest"
+DEFAULT_THREADS_PER_RANK = 1
 
 
 class MLP(nn.Module):
@@ -111,10 +112,10 @@ def train_epoch(
     return EpochStats(loss_sum=loss_sum, samples=samples, optimizer_steps=optimizer_steps)
 
 
-def configure_threads(ctx: DistContext) -> int:
+def configure_threads() -> int:
+    # The Go launcher always sets OMP_NUM_THREADS; 1 matches torchrun's own default.
     configured = os.environ.get("OMP_NUM_THREADS", "")
-    threads = int(configured) if configured else max(1, (os.cpu_count() or 1) // ctx.local_world_size)
-    torch.set_num_threads(max(1, threads))
+    torch.set_num_threads(max(1, int(configured) if configured else DEFAULT_THREADS_PER_RANK))
     return torch.get_num_threads()
 
 
@@ -171,7 +172,7 @@ def _run_job(
 ) -> dict[str, Any]:
     random.seed(settings.seed)
     torch.manual_seed(settings.seed)
-    threads = configure_threads(ctx)
+    threads = configure_threads()
     loader, sampler = build_loader(settings, ctx)
     model = build_model(settings, ctx)
     optimizer = build_optimizer(model, settings)
@@ -203,7 +204,8 @@ def _run_job(
         epoch_loss = loss_total / max(1.0, sample_total)
         epoch_losses.append(epoch_loss)
         processed_samples += int(sample_total)
-        progress = Progress(epoch=epoch + 1, global_step=progress.global_step + stats.optimizer_steps)
+        global_step = progress.global_step + stats.optimizer_steps
+        progress = Progress(epoch=epoch + 1, global_step=global_step)
         if ctx.is_primary:
             _emit_event(
                 {

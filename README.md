@@ -27,7 +27,7 @@ go build -o bin/trainmesh ./cmd/trainmesh
 ./bin/trainmesh run --config examples/cpu-ddp.yaml
 ```
 
-The example uses deterministic synthetic data, a small MLP, two CPU ranks, Gloo gradient synchronization, and saves `checkpoints/latest/checkpoint.pt`. The global batch is `per_rank × world_size × accumulation_steps`; this example has `64 × 2 × 1 = 128`.
+The example uses deterministic synthetic data, a small MLP, two CPU ranks, Gloo gradient synchronization, and saves a verified safetensors checkpoint in `checkpoints/latest/`. The global batch is `per_rank × world_size × accumulation_steps`; this example has `64 × 2 × 1 = 128`.
 
 ## Commands
 
