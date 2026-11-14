@@ -62,14 +62,27 @@ def _torchrun_two_ranks(config: Path, *runtime_args: str) -> subprocess.Complete
         str(config),
         *runtime_args,
     ]
-    return subprocess.run(
-        command,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=TORCHRUN_TIMEOUT_SECONDS,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            command,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=TORCHRUN_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            f"torchrun timed out after {TORCHRUN_TIMEOUT_SECONDS}s\n"
+            f"--- stdout ---\n{_decode(exc.stdout)}\n--- stderr ---\n{_decode(exc.stderr)}"
+        )
+
+
+def _decode(output: bytes | str | None) -> str:
+    # TimeoutExpired always carries bytes, even with text=True.
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output or ""
 
 
 def test_loads_supported_cpu_config(tmp_path: Path) -> None:
