@@ -1,0 +1,40 @@
+version: 1
+cluster:
+  name: local-cpu-cluster
+run:
+  name: trainmesh-cpu-demo
+  seed: 42
+execution:
+  strategy: data_parallel
+  backend:
+    device: cpu
+    communication: gloo
+  workers: 1
+  processes_per_worker: 2
+  rendezvous:
+    backend: c10d
+    endpoint: auto
+training:
+  model:
+    type: mlp
+    input_size: 32
+    hidden_size: 64
+    output_size: 4
+  dataset:
+    type: synthetic
+    samples: 4096
+    input_size: 32
+    output_size: 4
+  optimizer:
+    name: adam
+    learning_rate: 0.001
+  batch:
+    per_rank: 64
+    gradient_accumulation_steps: 1
+  epochs: 3
+  precision: fp32
+  checkpoint:
+    enabled: true
+    directory: ./checkpoints
+optimizer:
+  enabled: false

@@ -1,0 +1,17 @@
+{
+  "world_size": 2,
+  "rank": 0,
+  "local_rank": 0,
+  "epochs": 3,
+  "global_step": 96,
+  "final_loss": 1.377891343086958,
+  "epoch_losses": [
+    1.3999297134578228,
+    1.3839395865797997,
+    1.377891343086958
+  ],
+  "duration_seconds": 0.1597909159900155,
+  "samples_per_second": 76900.49164476793,
+  "model_sha256": "e5f293d88fa857af926e73074e30e71714abab02dfa65d34186280787ac90682",
+  "parameters_consistent": true
+}
