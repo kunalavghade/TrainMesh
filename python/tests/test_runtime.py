@@ -85,7 +85,13 @@ training:
         assert '"parameters_consistent": true' in proc.stdout
         metadata = json.loads((root / "checkpoints/latest/metadata.json").read_text(encoding="utf-8"))
         assert metadata["world_size"] == 2
-        assert len(metadata["checkpoint_sha256"]) == 64
+        assert metadata["format_version"] == 2
+        assert set(metadata["files"]) == {
+            "model.safetensors",
+            "optimizer.safetensors",
+            "rng.safetensors",
+            "state.json",
+        }
         config.write_text(config.read_text(encoding="utf-8").replace("epochs: 1", "epochs: 2"), encoding="utf-8")
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))

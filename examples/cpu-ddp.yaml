@@ -4,6 +4,7 @@ cluster:
 run:
   name: trainmesh-cpu-demo
   seed: 42
+  results_path: "" # optional JSON results file
 execution:
   strategy: data_parallel
   backend:
@@ -11,6 +12,7 @@ execution:
     communication: gloo
   workers: 1
   processes_per_worker: 2
+  cpu_threads_per_rank: 0 # 0 = auto: logical CPUs / local ranks
   rendezvous:
     backend: c10d
     endpoint: auto
@@ -36,5 +38,5 @@ training:
   checkpoint:
     enabled: true
     directory: ./checkpoints
-optimizer:
+planner:
   enabled: false
