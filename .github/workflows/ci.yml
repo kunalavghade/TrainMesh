@@ -50,5 +50,26 @@ jobs:
           printf '127.0.0.1 trainmesh-ci\n::1 trainmesh-ci\n' | sudo tee -a /etc/hosts
           sudo dscacheutil -flushcache
           sudo killall -HUP mDNSResponder || true
-          .venv/bin/python -c "import socket, time; t = time.time(); print(socket.gethostname(), socket.getfqdn()); d = time.time() - t; print(f'hostname lookup took {d:.2f}s'); raise SystemExit(d > 2)"
+          scutil --dns | grep -E "nameserver|search domain|resolver #" | head -12
+          .venv/bin/python - <<'EOF'
+          import socket, time
+          host = socket.gethostname()
+          def timed(label, fn):
+              start = time.time()
+              try:
+                  result = fn()
+              except Exception as exc:  # noqa: BLE001
+                  result = f"ERROR {exc!r}"
+              print(f"{label}: {time.time() - start:.2f}s -> {result}", flush=True)
+          timed("getaddrinfo(host, AF_INET)", lambda: socket.getaddrinfo(host, None, socket.AF_INET)[:1])
+          timed("getaddrinfo(host, AF_INET6)", lambda: socket.getaddrinfo(host, None, socket.AF_INET6)[:1])
+          timed("gethostbyaddr('127.0.0.1')", lambda: socket.gethostbyaddr("127.0.0.1"))
+          timed("gethostbyaddr('::1')", lambda: socket.gethostbyaddr("::1"))
+          timed("gethostbyaddr(host)", lambda: socket.gethostbyaddr(host))
+          start = time.time()
+          print("getfqdn ->", socket.getfqdn(host))
+          elapsed = time.time() - start
+          print(f"getfqdn took {elapsed:.2f}s")
+          raise SystemExit(elapsed > 2)
+          EOF
       - run: PYTHONPATH=python .venv/bin/python -m pytest python/tests -q
