@@ -19,11 +19,21 @@ func capabilitiesFromProto(c *trainmeshv1.Capabilities) store.Capabilities {
 		MemoryBytes:    c.GetMemoryBytes(),
 		RuntimeVersion: c.GetRuntimeVersion(),
 		TorchVersion:   c.GetTorchVersion(),
+		Device:         c.GetDevice(),
+		Devices:        deviceProfilesFromProto(c.GetDevices()),
 	}
 }
 
+func deviceProfilesFromProto(profiles []*trainmeshv1.DeviceProfile) []store.DeviceProfile {
+	out := make([]store.DeviceProfile, 0, len(profiles))
+	for _, p := range profiles {
+		out = append(out, store.DeviceProfile{Kind: p.GetKind(), SamplesPerSecond: p.GetSamplesPerSecond()})
+	}
+	return out
+}
+
 func capabilitiesToProto(c store.Capabilities) *trainmeshv1.Capabilities {
-	return &trainmeshv1.Capabilities{
+	caps := &trainmeshv1.Capabilities{
 		Hostname:       c.Hostname,
 		Os:             c.OS,
 		Arch:           c.Arch,
@@ -31,7 +41,12 @@ func capabilitiesToProto(c store.Capabilities) *trainmeshv1.Capabilities {
 		MemoryBytes:    c.MemoryBytes,
 		RuntimeVersion: c.RuntimeVersion,
 		TorchVersion:   c.TorchVersion,
+		Device:         c.Device,
 	}
+	for _, p := range c.Devices {
+		caps.Devices = append(caps.Devices, &trainmeshv1.DeviceProfile{Kind: p.Kind, SamplesPerSecond: p.SamplesPerSecond})
+	}
+	return caps
 }
 
 func nodeToProto(n store.Node) *trainmeshv1.Node {
@@ -44,6 +59,7 @@ func nodeToProto(n store.Node) *trainmeshv1.Node {
 		JoinedAt:      timestamp(n.JoinedAt),
 		LastHeartbeat: timestamp(n.LastHeartbeat),
 		CurrentJobId:  n.CurrentJobID,
+		Island:        island(n.Capabilities),
 	}
 }
 
@@ -59,6 +75,10 @@ func jobToProto(j store.Job) *trainmeshv1.Job {
 		Error:           j.Error,
 		CreatedAt:       timestamp(j.CreatedAt),
 		FinishedAt:      timestamp(j.FinishedAt),
+		Communication:   j.Communication,
+	}
+	for _, size := range j.RankBatchSizes {
+		job.RankBatchSizes = append(job.RankBatchSizes, toInt32(size))
 	}
 	for _, a := range j.Assignments {
 		job.Assignments = append(job.Assignments, &trainmeshv1.Assignment{

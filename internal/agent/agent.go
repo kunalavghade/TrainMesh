@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,9 @@ func (a *Agent) NodeID() string { return a.identity.NodeID }
 // Interface is the network interface used for training traffic, known after Start.
 func (a *Agent) Interface() string { return a.cfg.Interface }
 
+// Device is the device this node trains on for device=auto jobs, known after Start.
+func (a *Agent) Device() string { return a.caps.GetDevice() }
+
 // Start joins if needed, connects with the node certificate and probes capabilities.
 func (a *Agent) Start(ctx context.Context) error {
 	identity, err := LoadIdentity(a.cfg.StateDir)
@@ -131,7 +135,8 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("connecting to %s: %w", identity.Coordinator, err)
 	}
 	a.client = trainmeshv1.NewCoordinatorServiceClient(a.conn)
-	a.logger.Info("agent started", "coordinator", identity.Coordinator, "address", a.cfg.Address, "interface", a.cfg.Interface)
+	a.logger.Info("agent started", "coordinator", identity.Coordinator, "address", a.cfg.Address,
+		"interface", a.cfg.Interface, "device", a.caps.GetDevice(), "profiles", deviceProfiles(a.caps))
 	return nil
 }
 
@@ -332,4 +337,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// deviceProfiles formats measured throughputs for logs, e.g. "mps=512000/s cpu=270000/s".
+func deviceProfiles(caps *trainmeshv1.Capabilities) string {
+	parts := make([]string, 0, len(caps.GetDevices()))
+	for _, d := range caps.GetDevices() {
+		parts = append(parts, fmt.Sprintf("%s=%.0f/s", d.GetKind(), d.GetSamplesPerSecond()))
+	}
+	return strings.Join(parts, " ")
 }

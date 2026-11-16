@@ -38,6 +38,12 @@ class TrainingSettings:
     epochs: int
     per_rank_batch: int
     accumulation_steps: int
+    rank_batch_sizes: tuple[int, ...]
+    balance: str
+    device: str
+    communication: str
+    precision: str
+    gradient_sync: str
     dataset_type: str
     samples: int
     validation_samples: int
@@ -96,6 +102,12 @@ def training_settings(spec: JobSpec) -> TrainingSettings:
         epochs=training.epochs,
         per_rank_batch=training.batch.per_rank,
         accumulation_steps=training.batch.gradient_accumulation_steps or 1,
+        rank_batch_sizes=tuple(training.batch.rank_batch_sizes),
+        balance=training.batch.balance or "uniform",
+        device=spec.execution.backend.device,
+        communication=spec.execution.backend.communication,
+        precision=training.precision or "fp32",
+        gradient_sync=spec.execution.gradient_sync or "auto",
         dataset_type=dataset.type,
         samples=dataset.samples,
         validation_samples=training.validation.samples,

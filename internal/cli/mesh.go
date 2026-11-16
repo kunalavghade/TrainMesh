@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -123,6 +124,7 @@ func nodesCommand() *cobra.Command {
 				"hostname": caps.GetHostname(), "cpus": caps.GetLogicalCpus(),
 				"memory_gib": float64(caps.GetMemoryBytes()) / bytesPerGiB,
 				"torch":      caps.GetTorchVersion(), "runtime": caps.GetRuntimeVersion(),
+				"device": caps.GetDevice(), "island": n.GetIsland(), "samples_per_second": deviceThroughputs(caps),
 				"last_heartbeat": n.GetLastHeartbeat().AsTime().Format(time.RFC3339), "current_job": n.GetCurrentJobId(),
 			})
 		}
@@ -235,7 +237,11 @@ func followJob(ctx context.Context, client trainmeshv1.CoordinatorServiceClient,
 
 func reportChanges(w io.Writer, job *trainmeshv1.Job, lastSeen map[string]string) {
 	if lastSeen["job"] != job.GetState() {
-		fmt.Fprintf(w, "[%s] %s on %d machine(s), master %s:%d\n", job.GetId(), job.GetState(), job.GetMachines(), job.GetMasterAddr(), job.GetMasterPort())
+		fmt.Fprintf(w, "[%s] %s on %d machine(s), master %s:%d, %s", job.GetId(), job.GetState(), job.GetMachines(), job.GetMasterAddr(), job.GetMasterPort(), job.GetCommunication())
+		if sizes := job.GetRankBatchSizes(); len(sizes) > 0 {
+			fmt.Fprintf(w, ", rank batches %v", sizes)
+		}
+		fmt.Fprintln(w)
 		lastSeen["job"] = job.GetState()
 	}
 	for _, a := range job.GetAssignments() {
@@ -291,4 +297,13 @@ func jobSummary(job *trainmeshv1.Job) map[string]any {
 
 func isTerminal(state string) bool {
 	return state == "SUCCEEDED" || state == "FAILED" || state == "CANCELLED"
+}
+
+// deviceThroughputs maps each measured device kind to its reference samples/s.
+func deviceThroughputs(caps *trainmeshv1.Capabilities) map[string]float64 {
+	out := make(map[string]float64, len(caps.GetDevices()))
+	for _, d := range caps.GetDevices() {
+		out[d.GetKind()] = math.Round(d.GetSamplesPerSecond())
+	}
+	return out
 }

@@ -25,9 +25,10 @@ var memoryReaders = map[string]func() (uint64, error){
 	"linux":  linuxMemory,
 }
 
-// ProbeCapabilities describes this machine: OS, CPUs, memory and the runtime/PyTorch versions
-// reported by the same Python environment that will run training.
-func ProbeCapabilities(ctx context.Context, rt launcher.Runtime) (*trainmeshv1.Capabilities, error) {
+// ProbeCapabilities describes this machine: OS, CPUs, memory, the runtime/PyTorch versions and
+// the measured reference-model throughput of each device it offers (device "auto" offers every
+// available one, otherwise only that one), all from the Python environment that will train.
+func ProbeCapabilities(ctx context.Context, rt launcher.Runtime, device string) (*trainmeshv1.Capabilities, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -44,15 +45,23 @@ func ProbeCapabilities(ctx context.Context, rt launcher.Runtime) (*trainmeshv1.C
 		}
 	}
 
-	probe := exec.CommandContext(ctx, rt.Python, "-m", probeModule) // #nosec G204 -- discovered interpreter
+	// #nosec G204 -- discovered interpreter; device is validated by the flag parser
+	probe := exec.CommandContext(ctx, rt.Python, "-m", probeModule, "--benchmark", "--device", device)
 	probe.Env = launcher.Spec{RuntimeDir: rt.RuntimeDir, ThreadsPerRank: 1}.Env(os.Environ(), runtime.GOOS)
+	var stderr strings.Builder
+	probe.Stderr = &stderr
 	out, err := probe.Output()
 	if err != nil {
-		return nil, fmt.Errorf("running %s with %s: %w", probeModule, rt.Python, err)
+		return nil, fmt.Errorf("running %s with %s: %w: %s", probeModule, rt.Python, err, strings.TrimSpace(stderr.String()))
 	}
 	var report struct {
 		Torch          string `json:"torch"`
 		RuntimeVersion string `json:"runtime_version"`
+		Device         string `json:"device"`
+		Devices        []struct {
+			Kind             string  `json:"kind"`
+			SamplesPerSecond float64 `json:"samples_per_second"`
+		} `json:"devices"`
 	}
 	if err := json.Unmarshal(out, &report); err != nil {
 		return nil, fmt.Errorf("parsing probe output: %w", err)
@@ -60,7 +69,10 @@ func ProbeCapabilities(ctx context.Context, rt launcher.Runtime) (*trainmeshv1.C
 	if report.Torch == "" || report.Torch == "missing" {
 		return nil, fmt.Errorf("PyTorch is not installed for %s", rt.Python)
 	}
-	caps.TorchVersion, caps.RuntimeVersion = report.Torch, report.RuntimeVersion
+	caps.TorchVersion, caps.RuntimeVersion, caps.Device = report.Torch, report.RuntimeVersion, report.Device
+	for _, d := range report.Devices {
+		caps.Devices = append(caps.Devices, &trainmeshv1.DeviceProfile{Kind: d.Kind, SamplesPerSecond: d.SamplesPerSecond})
+	}
 	return caps, nil
 }
 

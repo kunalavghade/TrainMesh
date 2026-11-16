@@ -240,8 +240,13 @@ type Execution struct {
 	CpuThreadsPerRank int32       `protobuf:"varint,4,opt,name=cpu_threads_per_rank,json=cpuThreadsPerRank,proto3" json:"cpu_threads_per_rank,omitempty"`
 	Backend           *Backend    `protobuf:"bytes,5,opt,name=backend,proto3" json:"backend,omitempty"`
 	Rendezvous        *Rendezvous `protobuf:"bytes,6,opt,name=rendezvous,proto3" json:"rendezvous,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// ddp: PyTorch DDP (overlaps communication with backward; CPU and CUDA only).
+	// allreduce: one flattened all-reduce per optimizer step, staged through CPU memory when the
+	// device cannot use the collective backend (MPS); needed for unequal per-rank batches.
+	// Empty or auto: ddp when possible, otherwise allreduce.
+	GradientSync  string `protobuf:"bytes,7,opt,name=gradient_sync,json=gradientSync,proto3" json:"gradient_sync,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Execution) Reset() {
@@ -316,10 +321,21 @@ func (x *Execution) GetRendezvous() *Rendezvous {
 	return nil
 }
 
+func (x *Execution) GetGradientSync() string {
+	if x != nil {
+		return x.GradientSync
+	}
+	return ""
+}
+
 type Backend struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Device        string                 `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
-	Communication string                 `protobuf:"bytes,2,opt,name=communication,proto3" json:"communication,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// cpu, mps (Apple GPU), cuda (NVIDIA; AMD ROCm builds of PyTorch also report cuda), or auto:
+	// each machine uses the best device it offers (cuda, then mps, then cpu).
+	Device string `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
+	// gloo works with every device (MPS gradients are staged through CPU memory); nccl only with
+	// cuda; auto lets the coordinator pick nccl when every chosen machine uses cuda, else gloo.
+	Communication string `protobuf:"bytes,2,opt,name=communication,proto3" json:"communication,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -428,7 +444,8 @@ type Training struct {
 	Optimizer *Optimizer             `protobuf:"bytes,3,opt,name=optimizer,proto3" json:"optimizer,omitempty"`
 	Batch     *Batch                 `protobuf:"bytes,4,opt,name=batch,proto3" json:"batch,omitempty"`
 	Epochs    int32                  `protobuf:"varint,5,opt,name=epochs,proto3" json:"epochs,omitempty"`
-	// Empty means fp32.
+	// Empty means fp32. bf16/fp16 use autocast (fp16 adds a gradient scaler). auto picks bf16 on
+	// CUDA devices that support it and fp32 elsewhere: on the measured Apple CPU bf16 was 16x slower.
 	Precision     string      `protobuf:"bytes,6,opt,name=precision,proto3" json:"precision,omitempty"`
 	Checkpoint    *Checkpoint `protobuf:"bytes,7,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
 	Validation    *Validation `protobuf:"bytes,8,opt,name=validation,proto3" json:"validation,omitempty"`
@@ -718,12 +735,20 @@ func (x *Optimizer) GetLearningRate() float64 {
 }
 
 type Batch struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	PerRank int32                  `protobuf:"varint,1,opt,name=per_rank,json=perRank,proto3" json:"per_rank,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Samples per rank per micro-batch when every rank gets the same share. The global batch is
+	// always per_rank x world_size x gradient_accumulation_steps.
+	PerRank int32 `protobuf:"varint,1,opt,name=per_rank,json=perRank,proto3" json:"per_rank,omitempty"`
 	// Zero means 1.
 	GradientAccumulationSteps int32 `protobuf:"varint,2,opt,name=gradient_accumulation_steps,json=gradientAccumulationSteps,proto3" json:"gradient_accumulation_steps,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// uniform (default): every rank gets per_rank. throughput: the coordinator splits the same
+	// global batch in proportion to each machine's measured throughput.
+	Balance string `protobuf:"bytes,3,opt,name=balance,proto3" json:"balance,omitempty"`
+	// Explicit per-rank micro-batch sizes in rank order, normally filled by the coordinator. Must
+	// have one entry per rank and sum to per_rank x world_size.
+	RankBatchSizes []int32 `protobuf:"varint,4,rep,packed,name=rank_batch_sizes,json=rankBatchSizes,proto3" json:"rank_batch_sizes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Batch) Reset() {
@@ -768,6 +793,20 @@ func (x *Batch) GetGradientAccumulationSteps() int32 {
 		return x.GradientAccumulationSteps
 	}
 	return 0
+}
+
+func (x *Batch) GetBalance() string {
+	if x != nil {
+		return x.Balance
+	}
+	return ""
+}
+
+func (x *Batch) GetRankBatchSizes() []int32 {
+	if x != nil {
+		return x.RankBatchSizes
+	}
+	return nil
 }
 
 type Checkpoint struct {
@@ -889,7 +928,7 @@ const file_trainmesh_v1_jobspec_proto_rawDesc = "" +
 	"\x04seed\x18\x02 \x01(\x03H\x00R\x04seed\x88\x01\x01\x12\x16\n" +
 	"\x06resume\x18\x03 \x01(\tR\x06resume\x12!\n" +
 	"\fresults_path\x18\x04 \x01(\tR\vresultsPathB\a\n" +
-	"\x05_seed\"\x9e\x03\n" +
+	"\x05_seed\"\xc8\x04\n" +
 	"\tExecution\x12\x85\x01\n" +
 	"\bstrategy\x18\x01 \x01(\tBi\xbaHf\xba\x01c\n" +
 	"\x12execution.strategy\x124only execution.strategy=data_parallel is implemented\x1a\x17this == 'data_parallel'R\bstrategy\x12!\n" +
@@ -899,24 +938,27 @@ const file_trainmesh_v1_jobspec_proto_rawDesc = "" +
 	"\abackend\x18\x05 \x01(\v2\x15.trainmesh.v1.BackendB\x06\xbaH\x03\xc8\x01\x01R\abackend\x128\n" +
 	"\n" +
 	"rendezvous\x18\x06 \x01(\v2\x18.trainmesh.v1.RendezvousR\n" +
-	"rendezvous\"\xa5\x02\n" +
-	"\aBackend\x12\x8a\x01\n" +
-	"\x06device\x18\x01 \x01(\tBr\xbaHo\xba\x01l\n" +
-	"\x18execution.backend.device\x12Athis release supports device=cpu only; CUDA/NCCL is not available\x1a\rthis == 'cpu'R\x06device\x12\x8c\x01\n" +
-	"\rcommunication\x18\x02 \x01(\tBf\xbaHc\xba\x01`\n" +
-	"\x1fexecution.backend.communication\x12-this release supports communication=gloo only\x1a\x0ethis == 'gloo'R\rcommunication\"B\n" +
+	"rendezvous\x12\xa7\x01\n" +
+	"\rgradient_sync\x18\a \x01(\tB\x81\x01\xbaH~\xba\x01{\n" +
+	"\x17execution.gradient_sync\x126execution.gradient_sync must be auto, ddp or allreduce\x1a(this in ['', 'auto', 'ddp', 'allreduce']R\fgradientSync\"\x98\x04\n" +
+	"\aBackend\x12\x9a\x01\n" +
+	"\x06device\x18\x01 \x01(\tB\x81\x01\xbaH~\xba\x01{\n" +
+	"\x18execution.backend.device\x127execution.backend.device must be cpu, mps, cuda or auto\x1a&this in ['cpu', 'mps', 'cuda', 'auto']R\x06device\x12\xad\x01\n" +
+	"\rcommunication\x18\x02 \x01(\tB\x86\x01\xbaH\x82\x01\xba\x01\x7f\n" +
+	"\x1fexecution.backend.communication\x12:execution.backend.communication must be gloo, nccl or auto\x1a this in ['gloo', 'nccl', 'auto']R\rcommunication:\xbf\x01\xbaH\xbb\x01\x1a\xb8\x01\n" +
+	"!execution.backend.nccl_needs_cuda\x12\\communication=nccl needs device=cuda (NCCL cannot move CPU or MPS tensors); use gloo or auto\x1a5this.communication != 'nccl' || this.device == 'cuda'\"B\n" +
 	"\n" +
 	"Rendezvous\x12\x18\n" +
 	"\abackend\x18\x01 \x01(\tR\abackend\x12\x1a\n" +
-	"\bendpoint\x18\x02 \x01(\tR\bendpoint\"\xe9\x03\n" +
+	"\bendpoint\x18\x02 \x01(\tR\bendpoint\"\x8b\x04\n" +
 	"\bTraining\x12)\n" +
 	"\x05model\x18\x01 \x01(\v2\x13.trainmesh.v1.ModelR\x05model\x127\n" +
 	"\adataset\x18\x02 \x01(\v2\x15.trainmesh.v1.DatasetB\x06\xbaH\x03\xc8\x01\x01R\adataset\x125\n" +
 	"\toptimizer\x18\x03 \x01(\v2\x17.trainmesh.v1.OptimizerR\toptimizer\x121\n" +
 	"\x05batch\x18\x04 \x01(\v2\x13.trainmesh.v1.BatchB\x06\xbaH\x03\xc8\x01\x01R\x05batch\x12\x1f\n" +
-	"\x06epochs\x18\x05 \x01(\x05B\a\xbaH\x04\x1a\x02 \x00R\x06epochs\x12z\n" +
-	"\tprecision\x18\x06 \x01(\tB\\\xbaHY\xba\x01V\n" +
-	"\x12training.precision\x12*only fp32 precision is currently supported\x1a\x14this in ['', 'fp32']R\tprecision\x128\n" +
+	"\x06epochs\x18\x05 \x01(\x05B\a\xbaH\x04\x1a\x02 \x00R\x06epochs\x12\x9b\x01\n" +
+	"\tprecision\x18\x06 \x01(\tB}\xbaHz\xba\x01w\n" +
+	"\x12training.precision\x123training.precision must be fp32, bf16, fp16 or auto\x1a,this in ['', 'fp32', 'bf16', 'fp16', 'auto']R\tprecision\x128\n" +
 	"\n" +
 	"checkpoint\x18\a \x01(\v2\x18.trainmesh.v1.CheckpointR\n" +
 	"checkpoint\x128\n" +
@@ -943,10 +985,13 @@ const file_trainmesh_v1_jobspec_proto_rawDesc = "" +
 	"\tOptimizer\x12}\n" +
 	"\x04name\x18\x01 \x01(\tBi\xbaHf\xba\x01c\n" +
 	"\x17training.optimizer.name\x12+training.optimizer.name must be adam or sgd\x1a\x1bthis in ['', 'adam', 'sgd']R\x04name\x123\n" +
-	"\rlearning_rate\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\flearningRate\"t\n" +
+	"\rlearning_rate\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\flearningRate\"\xc4\x02\n" +
 	"\x05Batch\x12\"\n" +
 	"\bper_rank\x18\x01 \x01(\x05B\a\xbaH\x04\x1a\x02 \x00R\aperRank\x12G\n" +
-	"\x1bgradient_accumulation_steps\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\x19gradientAccumulationSteps\"U\n" +
+	"\x1bgradient_accumulation_steps\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\x19gradientAccumulationSteps\x12\x95\x01\n" +
+	"\abalance\x18\x03 \x01(\tB{\xbaHx\xba\x01u\n" +
+	"\x16training.batch.balance\x124training.batch.balance must be uniform or throughput\x1a%this in ['', 'uniform', 'throughput']R\abalance\x126\n" +
+	"\x10rank_batch_sizes\x18\x04 \x03(\x05B\f\xbaH\t\x92\x01\x06\"\x04\x1a\x02 \x00R\x0erankBatchSizes\"U\n" +
 	"\n" +
 	"Checkpoint\x12\x1d\n" +
 	"\aenabled\x18\x01 \x01(\bH\x00R\aenabled\x88\x01\x01\x12\x1c\n" +

@@ -81,12 +81,16 @@ def test_teacher_dataset_is_deterministic_and_balanced_enough_to_learn() -> None
 
 def test_validation_shards_are_disjoint_and_cover_every_sample() -> None:
     settings = training_settings(parse_config(_document()))
+    full = make_dataset(
+        settings, samples=settings.validation_samples, seed_offset=VALIDATION_SEED_OFFSET
+    )
     seen = []
     for rank in range(3):
         loader = build_validation_loader(settings, _context(rank, world_size=3))
-        seen += list(loader.dataset.indices)
+        seen += [features[:, 0] for features, _ in loader]
 
-    assert sorted(seen) == list(range(settings.validation_samples))
+    # The first feature of each random sample identifies it: no sample twice, none missing.
+    assert torch.equal(torch.cat(seen).sort().values, full.tensors[0][:, 0].sort().values)
 
 
 def test_evaluate_reports_perfect_accuracy_for_the_teacher_itself() -> None:

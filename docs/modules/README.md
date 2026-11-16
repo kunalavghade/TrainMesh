@@ -1,14 +1,14 @@
 # Module map
 
-What exists in the code today (end of Phase 1), what each module is responsible for, and how a
+What exists in the code today (end of Phase 2), what each module is responsible for, and how a
 training run flows through them. Target modules that do not exist yet (`tmcomm`, `tmdata`, the
-planner, …) are described in [TRAINMESH_ARCHITECTURE.md](../TRAINMESH_ARCHITECTURE.md).
+adaptive planner, …) are described in [TRAINMESH_ARCHITECTURE.md](../TRAINMESH_ARCHITECTURE.md).
 
 | Module | Path | Language | Responsibility | Page |
 |--------|------|----------|----------------|------|
 | CLI | `cmd/trainmesh`, `internal/cli` | Go | Commands (`doctor`, `plan`, `run`, `benchmark`, `token`, `nodes`, `job`, `cluster`), signal handling | [cli.md](cli.md) |
-| Coordinator (`meshd`) | `cmd/meshd`, `internal/coordinator` | Go | Admits machines, liveness, scheduling, job lifecycle, gRPC API with per-method roles | [mesh.md](mesh.md) |
-| Agent (`tm-agent`) | `cmd/tm-agent`, `internal/agent` | Go | Joins, heartbeats, runs its node rank of a job, reports results | [mesh.md](mesh.md) |
+| Coordinator (`meshd`) | `cmd/meshd`, `internal/coordinator` | Go | Admits machines, liveness, scheduling and planning (device, backend, batch split), job lifecycle, gRPC API with per-method roles | [mesh.md](mesh.md) |
+| Agent (`tm-agent`) | `cmd/tm-agent`, `internal/agent` | Go | Joins, benchmarks its devices, heartbeats, runs its node rank of a job, reports results | [mesh.md](mesh.md) |
 | Membership | `internal/membership` | Go | Node lifecycle states, legal transitions, heartbeat-age rule (pure) | [mesh.md](mesh.md) |
 | Security | `internal/security` | Go | Join tokens and strings, cluster CA, certificates, TLS, caller identity | [mesh.md](mesh.md) |
 | Store | `internal/store` | Go | Transactional persistence of tokens, nodes, jobs (bbolt) | [mesh.md](mesh.md) |
@@ -17,6 +17,7 @@ planner, …) are described in [TRAINMESH_ARCHITECTURE.md](../TRAINMESH_ARCHITEC
 | Config loader (Go) | `internal/config` | Go | YAML → `JobSpec`, legacy-key migration, rule check, derived values | [config.md](config.md) |
 | Launcher | `internal/launcher` | Go | Finds the runtime, builds torchrun args/env, supervises ranks as a process group | [launcher.md](launcher.md) |
 | Training runtime | `python/trainmesh_runtime` | Python | Config, data, DDP training, validation, checkpoints, results | [runtime.md](runtime.md) |
+| Devices and balancing | `trainmesh_runtime/{devices,sync,balance,probe}.py`, `internal/coordinator/planner.go` | Python, Go | Device/precision/backend choice, gradient sync for mixed devices, throughput profiles, per-rank batch split | [devices.md](devices.md) |
 | E2E tooling | `scripts/e2e`, `deploy/docker` | Bash, Python | Local, minikube and physical-machine tests; 1-vs-multi machine comparison | [../E2E_TESTING.md](../E2E_TESTING.md) |
 
 ## How `trainmesh run` works on one machine
@@ -49,13 +50,16 @@ sequenceDiagram
    rendezvous port and starts `torchrun` in its own process group (retrying if the port is taken).
 4. **torchrun** starts one Python process per rank.
 5. **Runtime**, in each rank: parses the same config with the same rules, builds the deterministic
-   dataset, wraps the model in DDP, trains (one all-reduce per optimizer step), evaluates on the
-   held-out validation set, saves a verified checkpoint, and rank 0 writes the result JSON.
+   dataset, picks its device and gradient sync ([devices.md](devices.md)), trains (one
+   all-reduce per optimizer step), evaluates on the held-out validation set, saves a verified
+   checkpoint, and rank 0 writes the result JSON.
 
 ## How `trainmesh run --coordinator` works across machines
 
-The CLI submits the job to `meshd`; `meshd` picks `execution.workers` READY machines and hands
-each one a node rank in its agent's next heartbeat; every agent runs steps 3–5 above for its own
+The CLI submits the job to `meshd`; `meshd` picks `execution.workers` READY machines that offer
+the job's device, decides the collective backend and (for `balance: throughput`) each rank's
+share of the batch, writes that plan into the config, and hands each machine a node rank in its
+agent's next heartbeat; every agent runs steps 3–5 above for its own
 ranks with `--nnodes/--node_rank/--master_addr` from the coordinator; rank 0's result comes back
 through `meshd` to the CLI. Joining, liveness, failure handling and security are explained in
 [mesh.md](mesh.md).

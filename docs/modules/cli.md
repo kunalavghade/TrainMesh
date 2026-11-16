@@ -22,8 +22,8 @@ Ctrl-C would not reach them directly; cancelling the context is how the CLI stop
 | `trainmesh benchmark --config F [--output F]` | `train.go` | Same as `run` with a results file |
 | `trainmesh run --config F --coordinator H:P [--output F] [--timeout D]` | `mesh.go` | Submits the job to `meshd`, prints progress per node rank, prints rank 0's result JSON; Ctrl-C or timeout cancels it everywhere |
 | `trainmesh token create [--ttl 15m] [--uses 1]` | `mesh.go` | Prints a join string for new machines (`tm-agent --join …`) |
-| `trainmesh nodes` | `mesh.go` | Machines with state, address, CPUs, memory, PyTorch/runtime version, current job |
-| `trainmesh job get ID` / `job cancel ID` | `mesh.go` | Job state, per-node assignments, result; or cancel it |
+| `trainmesh nodes` | `mesh.go` | Machines with state, address, CPUs, memory, PyTorch/runtime version, device, measured samples/s per device, island, current job |
+| `trainmesh job get ID` / `job cancel ID` | `mesh.go` | Job state, chosen collective backend and per-rank batch split, per-node assignments, result; or cancel it |
 | `trainmesh cluster init [--name N]` / `status` | `cluster.go` | Local identity file only (predates the mesh; kept for compatibility) |
 
 Mesh commands talk to `meshd` with the admin certificate from `--admin-dir` (default

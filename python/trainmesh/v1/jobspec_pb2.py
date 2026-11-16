@@ -26,7 +26,7 @@ from buf.validate import validate_pb2 as buf_dot_validate_dot_validate__pb2
 from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1atrainmesh/v1/jobspec.proto\x12\x0ctrainmesh.v1\x1a\x1b\x62uf/validate/validate.proto\x1a\x1cgoogle/protobuf/struct.proto\"\xd6\x02\n\x07JobSpec\x12G\n\x07version\x18\x01 \x01(\x05\x42-\xbaH*\xba\x01\'\n\x07version\x12\x11version must be 1\x1a\tthis == 1R\x07version\x12/\n\x07\x63luster\x18\x02 \x01(\x0b\x32\x15.trainmesh.v1.ClusterR\x07\x63luster\x12#\n\x03run\x18\x03 \x01(\x0b\x32\x11.trainmesh.v1.RunR\x03run\x12=\n\texecution\x18\x04 \x01(\x0b\x32\x17.trainmesh.v1.ExecutionB\x06\xbaH\x03\xc8\x01\x01R\texecution\x12:\n\x08training\x18\x05 \x01(\x0b\x32\x16.trainmesh.v1.TrainingB\x06\xbaH\x03\xc8\x01\x01R\x08training\x12\x31\n\x07planner\x18\x06 \x01(\x0b\x32\x17.google.protobuf.StructR\x07planner\"\x1d\n\x07\x43luster\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\"v\n\x03Run\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x17\n\x04seed\x18\x02 \x01(\x03H\x00R\x04seed\x88\x01\x01\x12\x16\n\x06resume\x18\x03 \x01(\tR\x06resume\x12!\n\x0cresults_path\x18\x04 \x01(\tR\x0bresultsPathB\x07\n\x05_seed\"\x9e\x03\n\tExecution\x12\x85\x01\n\x08strategy\x18\x01 \x01(\tBi\xbaHf\xba\x01\x63\n\x12\x65xecution.strategy\x12\x34only execution.strategy=data_parallel is implemented\x1a\x17this == \'data_parallel\'R\x08strategy\x12!\n\x07workers\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x01R\x07workers\x12\x39\n\x14processes_per_worker\x18\x03 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x01R\x12processesPerWorker\x12\x38\n\x14\x63pu_threads_per_rank\x18\x04 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\x11\x63puThreadsPerRank\x12\x37\n\x07\x62\x61\x63kend\x18\x05 \x01(\x0b\x32\x15.trainmesh.v1.BackendB\x06\xbaH\x03\xc8\x01\x01R\x07\x62\x61\x63kend\x12\x38\n\nrendezvous\x18\x06 \x01(\x0b\x32\x18.trainmesh.v1.RendezvousR\nrendezvous\"\xa5\x02\n\x07\x42\x61\x63kend\x12\x8a\x01\n\x06\x64\x65vice\x18\x01 \x01(\tBr\xbaHo\xba\x01l\n\x18\x65xecution.backend.device\x12\x41this release supports device=cpu only; CUDA/NCCL is not available\x1a\rthis == \'cpu\'R\x06\x64\x65vice\x12\x8c\x01\n\rcommunication\x18\x02 \x01(\tBf\xbaHc\xba\x01`\n\x1f\x65xecution.backend.communication\x12-this release supports communication=gloo only\x1a\x0ethis == \'gloo\'R\rcommunication\"B\n\nRendezvous\x12\x18\n\x07\x62\x61\x63kend\x18\x01 \x01(\tR\x07\x62\x61\x63kend\x12\x1a\n\x08\x65ndpoint\x18\x02 \x01(\tR\x08\x65ndpoint\"\xe9\x03\n\x08Training\x12)\n\x05model\x18\x01 \x01(\x0b\x32\x13.trainmesh.v1.ModelR\x05model\x12\x37\n\x07\x64\x61taset\x18\x02 \x01(\x0b\x32\x15.trainmesh.v1.DatasetB\x06\xbaH\x03\xc8\x01\x01R\x07\x64\x61taset\x12\x35\n\toptimizer\x18\x03 \x01(\x0b\x32\x17.trainmesh.v1.OptimizerR\toptimizer\x12\x31\n\x05\x62\x61tch\x18\x04 \x01(\x0b\x32\x13.trainmesh.v1.BatchB\x06\xbaH\x03\xc8\x01\x01R\x05\x62\x61tch\x12\x1f\n\x06\x65pochs\x18\x05 \x01(\x05\x42\x07\xbaH\x04\x1a\x02 \x00R\x06\x65pochs\x12z\n\tprecision\x18\x06 \x01(\tB\\\xbaHY\xba\x01V\n\x12training.precision\x12*only fp32 precision is currently supported\x1a\x14this in [\'\', \'fp32\']R\tprecision\x12\x38\n\ncheckpoint\x18\x07 \x01(\x0b\x32\x18.trainmesh.v1.CheckpointR\ncheckpoint\x12\x38\n\nvalidation\x18\x08 \x01(\x0b\x32\x18.trainmesh.v1.ValidationR\nvalidation\"\xf4\x01\n\x05Model\x12o\n\x04type\x18\x01 \x01(\tB[\xbaHX\xba\x01U\n\x13training.model.type\x12)only training.model.type=mlp is supported\x1a\x13this in [\'\', \'mlp\']R\x04type\x12&\n\ninput_size\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\tinputSize\x12(\n\x0bhidden_size\x18\x03 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\nhiddenSize\x12(\n\x0boutput_size\x18\x04 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\noutputSize\"\x88\x02\n\x07\x44\x61taset\x12\x87\x01\n\x04type\x18\x01 \x01(\tBs\xbaHp\xba\x01m\n\x15training.dataset.type\x12\x32training.dataset.type must be synthetic or teacher\x1a this in [\'synthetic\', \'teacher\']R\x04type\x12!\n\x07samples\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02 \x00R\x07samples\x12&\n\ninput_size\x18\x03 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\tinputSize\x12(\n\x0boutput_size\x18\x04 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\noutputSize\"\xbf\x01\n\tOptimizer\x12}\n\x04name\x18\x01 \x01(\tBi\xbaHf\xba\x01\x63\n\x17training.optimizer.name\x12+training.optimizer.name must be adam or sgd\x1a\x1bthis in [\'\', \'adam\', \'sgd\']R\x04name\x12\x33\n\rlearning_rate\x18\x02 \x01(\x01\x42\x0e\xbaH\x0b\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x0clearningRate\"t\n\x05\x42\x61tch\x12\"\n\x08per_rank\x18\x01 \x01(\x05\x42\x07\xbaH\x04\x1a\x02 \x00R\x07perRank\x12G\n\x1bgradient_accumulation_steps\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\x19gradientAccumulationSteps\"U\n\nCheckpoint\x12\x1d\n\x07\x65nabled\x18\x01 \x01(\x08H\x00R\x07\x65nabled\x88\x01\x01\x12\x1c\n\tdirectory\x18\x02 \x01(\tR\tdirectoryB\n\n\x08_enabled\"/\n\nValidation\x12!\n\x07samples\x18\x01 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\x07samplesBFZDgithub.com/trainmesh/trainmesh/internal/gen/trainmesh/v1;trainmeshv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1atrainmesh/v1/jobspec.proto\x12\x0ctrainmesh.v1\x1a\x1b\x62uf/validate/validate.proto\x1a\x1cgoogle/protobuf/struct.proto\"\xd6\x02\n\x07JobSpec\x12G\n\x07version\x18\x01 \x01(\x05\x42-\xbaH*\xba\x01\'\n\x07version\x12\x11version must be 1\x1a\tthis == 1R\x07version\x12/\n\x07\x63luster\x18\x02 \x01(\x0b\x32\x15.trainmesh.v1.ClusterR\x07\x63luster\x12#\n\x03run\x18\x03 \x01(\x0b\x32\x11.trainmesh.v1.RunR\x03run\x12=\n\texecution\x18\x04 \x01(\x0b\x32\x17.trainmesh.v1.ExecutionB\x06\xbaH\x03\xc8\x01\x01R\texecution\x12:\n\x08training\x18\x05 \x01(\x0b\x32\x16.trainmesh.v1.TrainingB\x06\xbaH\x03\xc8\x01\x01R\x08training\x12\x31\n\x07planner\x18\x06 \x01(\x0b\x32\x17.google.protobuf.StructR\x07planner\"\x1d\n\x07\x43luster\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\"v\n\x03Run\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x17\n\x04seed\x18\x02 \x01(\x03H\x00R\x04seed\x88\x01\x01\x12\x16\n\x06resume\x18\x03 \x01(\tR\x06resume\x12!\n\x0cresults_path\x18\x04 \x01(\tR\x0bresultsPathB\x07\n\x05_seed\"\xc8\x04\n\tExecution\x12\x85\x01\n\x08strategy\x18\x01 \x01(\tBi\xbaHf\xba\x01\x63\n\x12\x65xecution.strategy\x12\x34only execution.strategy=data_parallel is implemented\x1a\x17this == \'data_parallel\'R\x08strategy\x12!\n\x07workers\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x01R\x07workers\x12\x39\n\x14processes_per_worker\x18\x03 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x01R\x12processesPerWorker\x12\x38\n\x14\x63pu_threads_per_rank\x18\x04 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\x11\x63puThreadsPerRank\x12\x37\n\x07\x62\x61\x63kend\x18\x05 \x01(\x0b\x32\x15.trainmesh.v1.BackendB\x06\xbaH\x03\xc8\x01\x01R\x07\x62\x61\x63kend\x12\x38\n\nrendezvous\x18\x06 \x01(\x0b\x32\x18.trainmesh.v1.RendezvousR\nrendezvous\x12\xa7\x01\n\rgradient_sync\x18\x07 \x01(\tB\x81\x01\xbaH~\xba\x01{\n\x17\x65xecution.gradient_sync\x12\x36\x65xecution.gradient_sync must be auto, ddp or allreduce\x1a(this in [\'\', \'auto\', \'ddp\', \'allreduce\']R\x0cgradientSync\"\x98\x04\n\x07\x42\x61\x63kend\x12\x9a\x01\n\x06\x64\x65vice\x18\x01 \x01(\tB\x81\x01\xbaH~\xba\x01{\n\x18\x65xecution.backend.device\x12\x37\x65xecution.backend.device must be cpu, mps, cuda or auto\x1a&this in [\'cpu\', \'mps\', \'cuda\', \'auto\']R\x06\x64\x65vice\x12\xad\x01\n\rcommunication\x18\x02 \x01(\tB\x86\x01\xbaH\x82\x01\xba\x01\x7f\n\x1f\x65xecution.backend.communication\x12:execution.backend.communication must be gloo, nccl or auto\x1a this in [\'gloo\', \'nccl\', \'auto\']R\rcommunication:\xbf\x01\xbaH\xbb\x01\x1a\xb8\x01\n!execution.backend.nccl_needs_cuda\x12\\communication=nccl needs device=cuda (NCCL cannot move CPU or MPS tensors); use gloo or auto\x1a\x35this.communication != \'nccl\' || this.device == \'cuda\'\"B\n\nRendezvous\x12\x18\n\x07\x62\x61\x63kend\x18\x01 \x01(\tR\x07\x62\x61\x63kend\x12\x1a\n\x08\x65ndpoint\x18\x02 \x01(\tR\x08\x65ndpoint\"\x8b\x04\n\x08Training\x12)\n\x05model\x18\x01 \x01(\x0b\x32\x13.trainmesh.v1.ModelR\x05model\x12\x37\n\x07\x64\x61taset\x18\x02 \x01(\x0b\x32\x15.trainmesh.v1.DatasetB\x06\xbaH\x03\xc8\x01\x01R\x07\x64\x61taset\x12\x35\n\toptimizer\x18\x03 \x01(\x0b\x32\x17.trainmesh.v1.OptimizerR\toptimizer\x12\x31\n\x05\x62\x61tch\x18\x04 \x01(\x0b\x32\x13.trainmesh.v1.BatchB\x06\xbaH\x03\xc8\x01\x01R\x05\x62\x61tch\x12\x1f\n\x06\x65pochs\x18\x05 \x01(\x05\x42\x07\xbaH\x04\x1a\x02 \x00R\x06\x65pochs\x12\x9b\x01\n\tprecision\x18\x06 \x01(\tB}\xbaHz\xba\x01w\n\x12training.precision\x12\x33training.precision must be fp32, bf16, fp16 or auto\x1a,this in [\'\', \'fp32\', \'bf16\', \'fp16\', \'auto\']R\tprecision\x12\x38\n\ncheckpoint\x18\x07 \x01(\x0b\x32\x18.trainmesh.v1.CheckpointR\ncheckpoint\x12\x38\n\nvalidation\x18\x08 \x01(\x0b\x32\x18.trainmesh.v1.ValidationR\nvalidation\"\xf4\x01\n\x05Model\x12o\n\x04type\x18\x01 \x01(\tB[\xbaHX\xba\x01U\n\x13training.model.type\x12)only training.model.type=mlp is supported\x1a\x13this in [\'\', \'mlp\']R\x04type\x12&\n\ninput_size\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\tinputSize\x12(\n\x0bhidden_size\x18\x03 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\nhiddenSize\x12(\n\x0boutput_size\x18\x04 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\noutputSize\"\x88\x02\n\x07\x44\x61taset\x12\x87\x01\n\x04type\x18\x01 \x01(\tBs\xbaHp\xba\x01m\n\x15training.dataset.type\x12\x32training.dataset.type must be synthetic or teacher\x1a this in [\'synthetic\', \'teacher\']R\x04type\x12!\n\x07samples\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02 \x00R\x07samples\x12&\n\ninput_size\x18\x03 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\tinputSize\x12(\n\x0boutput_size\x18\x04 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\noutputSize\"\xbf\x01\n\tOptimizer\x12}\n\x04name\x18\x01 \x01(\tBi\xbaHf\xba\x01\x63\n\x17training.optimizer.name\x12+training.optimizer.name must be adam or sgd\x1a\x1bthis in [\'\', \'adam\', \'sgd\']R\x04name\x12\x33\n\rlearning_rate\x18\x02 \x01(\x01\x42\x0e\xbaH\x0b\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x0clearningRate\"\xc4\x02\n\x05\x42\x61tch\x12\"\n\x08per_rank\x18\x01 \x01(\x05\x42\x07\xbaH\x04\x1a\x02 \x00R\x07perRank\x12G\n\x1bgradient_accumulation_steps\x18\x02 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\x19gradientAccumulationSteps\x12\x95\x01\n\x07\x62\x61lance\x18\x03 \x01(\tB{\xbaHx\xba\x01u\n\x16training.batch.balance\x12\x34training.batch.balance must be uniform or throughput\x1a%this in [\'\', \'uniform\', \'throughput\']R\x07\x62\x61lance\x12\x36\n\x10rank_batch_sizes\x18\x04 \x03(\x05\x42\x0c\xbaH\t\x92\x01\x06\"\x04\x1a\x02 \x00R\x0erankBatchSizes\"U\n\nCheckpoint\x12\x1d\n\x07\x65nabled\x18\x01 \x01(\x08H\x00R\x07\x65nabled\x88\x01\x01\x12\x1c\n\tdirectory\x18\x02 \x01(\tR\tdirectoryB\n\n\x08_enabled\"/\n\nValidation\x12!\n\x07samples\x18\x01 \x01(\x05\x42\x07\xbaH\x04\x1a\x02(\x00R\x07samplesBFZDgithub.com/trainmesh/trainmesh/internal/gen/trainmesh/v1;trainmeshv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -50,10 +50,14 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_EXECUTION'].fields_by_name['cpu_threads_per_rank']._serialized_options = b'\272H\004\032\002(\000'
   _globals['_EXECUTION'].fields_by_name['backend']._loaded_options = None
   _globals['_EXECUTION'].fields_by_name['backend']._serialized_options = b'\272H\003\310\001\001'
+  _globals['_EXECUTION'].fields_by_name['gradient_sync']._loaded_options = None
+  _globals['_EXECUTION'].fields_by_name['gradient_sync']._serialized_options = b'\272H~\272\001{\n\027execution.gradient_sync\0226execution.gradient_sync must be auto, ddp or allreduce\032(this in [\'\', \'auto\', \'ddp\', \'allreduce\']'
   _globals['_BACKEND'].fields_by_name['device']._loaded_options = None
-  _globals['_BACKEND'].fields_by_name['device']._serialized_options = b'\272Ho\272\001l\n\030execution.backend.device\022Athis release supports device=cpu only; CUDA/NCCL is not available\032\rthis == \'cpu\''
+  _globals['_BACKEND'].fields_by_name['device']._serialized_options = b'\272H~\272\001{\n\030execution.backend.device\0227execution.backend.device must be cpu, mps, cuda or auto\032&this in [\'cpu\', \'mps\', \'cuda\', \'auto\']'
   _globals['_BACKEND'].fields_by_name['communication']._loaded_options = None
-  _globals['_BACKEND'].fields_by_name['communication']._serialized_options = b'\272Hc\272\001`\n\037execution.backend.communication\022-this release supports communication=gloo only\032\016this == \'gloo\''
+  _globals['_BACKEND'].fields_by_name['communication']._serialized_options = b'\272H\202\001\272\001\177\n\037execution.backend.communication\022:execution.backend.communication must be gloo, nccl or auto\032 this in [\'gloo\', \'nccl\', \'auto\']'
+  _globals['_BACKEND']._loaded_options = None
+  _globals['_BACKEND']._serialized_options = b'\272H\273\001\032\270\001\n!execution.backend.nccl_needs_cuda\022\\communication=nccl needs device=cuda (NCCL cannot move CPU or MPS tensors); use gloo or auto\0325this.communication != \'nccl\' || this.device == \'cuda\''
   _globals['_TRAINING'].fields_by_name['dataset']._loaded_options = None
   _globals['_TRAINING'].fields_by_name['dataset']._serialized_options = b'\272H\003\310\001\001'
   _globals['_TRAINING'].fields_by_name['batch']._loaded_options = None
@@ -61,7 +65,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TRAINING'].fields_by_name['epochs']._loaded_options = None
   _globals['_TRAINING'].fields_by_name['epochs']._serialized_options = b'\272H\004\032\002 \000'
   _globals['_TRAINING'].fields_by_name['precision']._loaded_options = None
-  _globals['_TRAINING'].fields_by_name['precision']._serialized_options = b'\272HY\272\001V\n\022training.precision\022*only fp32 precision is currently supported\032\024this in [\'\', \'fp32\']'
+  _globals['_TRAINING'].fields_by_name['precision']._serialized_options = b'\272Hz\272\001w\n\022training.precision\0223training.precision must be fp32, bf16, fp16 or auto\032,this in [\'\', \'fp32\', \'bf16\', \'fp16\', \'auto\']'
   _globals['_MODEL'].fields_by_name['type']._loaded_options = None
   _globals['_MODEL'].fields_by_name['type']._serialized_options = b'\272HX\272\001U\n\023training.model.type\022)only training.model.type=mlp is supported\032\023this in [\'\', \'mlp\']'
   _globals['_MODEL'].fields_by_name['input_size']._loaded_options = None
@@ -86,6 +90,10 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_BATCH'].fields_by_name['per_rank']._serialized_options = b'\272H\004\032\002 \000'
   _globals['_BATCH'].fields_by_name['gradient_accumulation_steps']._loaded_options = None
   _globals['_BATCH'].fields_by_name['gradient_accumulation_steps']._serialized_options = b'\272H\004\032\002(\000'
+  _globals['_BATCH'].fields_by_name['balance']._loaded_options = None
+  _globals['_BATCH'].fields_by_name['balance']._serialized_options = b'\272Hx\272\001u\n\026training.batch.balance\0224training.batch.balance must be uniform or throughput\032%this in [\'\', \'uniform\', \'throughput\']'
+  _globals['_BATCH'].fields_by_name['rank_batch_sizes']._loaded_options = None
+  _globals['_BATCH'].fields_by_name['rank_batch_sizes']._serialized_options = b'\272H\t\222\001\006\"\004\032\002 \000'
   _globals['_VALIDATION'].fields_by_name['samples']._loaded_options = None
   _globals['_VALIDATION'].fields_by_name['samples']._serialized_options = b'\272H\004\032\002(\000'
   _globals['_JOBSPEC']._serialized_start=104
@@ -95,23 +103,23 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_RUN']._serialized_start=479
   _globals['_RUN']._serialized_end=597
   _globals['_EXECUTION']._serialized_start=600
-  _globals['_EXECUTION']._serialized_end=1014
-  _globals['_BACKEND']._serialized_start=1017
-  _globals['_BACKEND']._serialized_end=1310
-  _globals['_RENDEZVOUS']._serialized_start=1312
-  _globals['_RENDEZVOUS']._serialized_end=1378
-  _globals['_TRAINING']._serialized_start=1381
-  _globals['_TRAINING']._serialized_end=1870
-  _globals['_MODEL']._serialized_start=1873
-  _globals['_MODEL']._serialized_end=2117
-  _globals['_DATASET']._serialized_start=2120
-  _globals['_DATASET']._serialized_end=2384
-  _globals['_OPTIMIZER']._serialized_start=2387
-  _globals['_OPTIMIZER']._serialized_end=2578
-  _globals['_BATCH']._serialized_start=2580
-  _globals['_BATCH']._serialized_end=2696
-  _globals['_CHECKPOINT']._serialized_start=2698
-  _globals['_CHECKPOINT']._serialized_end=2783
-  _globals['_VALIDATION']._serialized_start=2785
-  _globals['_VALIDATION']._serialized_end=2832
+  _globals['_EXECUTION']._serialized_end=1184
+  _globals['_BACKEND']._serialized_start=1187
+  _globals['_BACKEND']._serialized_end=1723
+  _globals['_RENDEZVOUS']._serialized_start=1725
+  _globals['_RENDEZVOUS']._serialized_end=1791
+  _globals['_TRAINING']._serialized_start=1794
+  _globals['_TRAINING']._serialized_end=2317
+  _globals['_MODEL']._serialized_start=2320
+  _globals['_MODEL']._serialized_end=2564
+  _globals['_DATASET']._serialized_start=2567
+  _globals['_DATASET']._serialized_end=2831
+  _globals['_OPTIMIZER']._serialized_start=2834
+  _globals['_OPTIMIZER']._serialized_end=3025
+  _globals['_BATCH']._serialized_start=3028
+  _globals['_BATCH']._serialized_end=3352
+  _globals['_CHECKPOINT']._serialized_start=3354
+  _globals['_CHECKPOINT']._serialized_end=3439
+  _globals['_VALIDATION']._serialized_start=3441
+  _globals['_VALIDATION']._serialized_end=3488
 # @@protoc_insertion_point(module_scope)

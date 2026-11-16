@@ -1,6 +1,6 @@
 # TrainMesh — Next Steps (handoff)
 
-> Written 2026-11-14 for the next agent picking up this repo. It assumes **no memory of earlier
+> Written 2026-11-14, updated 2026-11-17 (end of Phase 2), for the next agent picking up this repo. It assumes **no memory of earlier
 > sessions**. Follow the tasks **in order**, do **one task at a time**, and **stop and report to
 > the user after each task**. When this file and the code disagree, trust the code and say so.
 
@@ -38,14 +38,18 @@ source, comments only for a non-obvious *why*.
 ### Repo layout (only the parts you will touch)
 
 ```text
-cmd/trainmesh/main.go          CLI entry: wires signals, calls internal/cli
-internal/cli/                  cobra commands: doctor, plan, run, benchmark, cluster
-internal/config/               Go config loader + validator (v1 YAML)
+cmd/{trainmesh,meshd,tm-agent} entry points: CLI, coordinator, agent
+internal/cli/                  cobra commands: doctor, plan, run, benchmark, token, nodes, job
+internal/config/               Go loader for the protobuf JobSpec (YAML → protojson → protovalidate)
 internal/launcher/             builds torchrun args/env, runs ranks in a process group
-python/trainmesh_runtime/      Python training runtime (config, distributed, checkpoint, runtime)
-python/tests/                  pytest suites (accumulation, checkpoint, runtime)
-.github/workflows/ci.yml       CI: Go + Python on ubuntu-latest and macos-latest
-Makefile                       build, test, lint, fmt targets
+internal/coordinator/          meshd: API, scheduler, planner (device, backend, batch split)
+internal/agent/                tm-agent: join, probe + benchmark, heartbeats, TorchRunner
+proto/trainmesh/v1/            jobspec.proto (job schema + rules), coordinator.proto (API)
+python/trainmesh_runtime/      runtime: config, data, devices, sync, balance, training, checkpoint
+python/tests/                  pytest suites
+scripts/e2e/                   local, mesh-local, devices-local, minikube, manual-node
+.github/workflows/ci.yml       CI: Go + Python on ubuntu-latest and macos-latest, e2e on Linux
+Makefile                       build, test, lint, fmt, generate, e2e-* targets
 ```
 
 ### Commands you will use
@@ -57,6 +61,8 @@ make lint         # gofmt, go vet, golangci-lint, ruff, black --check
 make fmt          # gofmt -w and black
 make generate     # regenerate Go/Python code from proto/ after editing jobspec.proto
 make e2e-local    # real CLI end to end on this machine, incl. learning check (~1 min)
+make e2e-mesh-local     # meshd + 2 agents on this machine
+make e2e-devices-local  # mps agent + cpu agent, uniform vs throughput balance (Apple Silicon)
 make e2e-minikube # 2-node minikube cluster: 1 vs 2 machine comparison (slow, needs Docker)
 ./bin/trainmesh run --config examples/cpu-ddp.yaml   # real 2-rank CPU training
 ```
@@ -72,13 +78,9 @@ for anything that imports torch.
 History was rewritten on 2026-11-16 so every commit is authored by `kunalavghade` (no-reply
 address); do not reintroduce the work email or any AI attribution.
 
-- `main` = `8ff4ef5` (pushed).
-- `feat/p0-jobspec` → PR [kunalavghade/TrainMesh#4](https://github.com/kunalavghade/TrainMesh/pull/4) (replaces #2, which GitHub auto-closed during the history rewrite):
-  Phase 0 (e2e tooling, single schema, proof of learning, module docs).
-- `feat/p1-lan-mesh` (based on `feat/p0-jobspec`) → its own PR: Phase 1 (coordinator, agents,
-  mTLS, CLI mesh commands, mesh e2e). Merge it **after** PR #4; then rebase it onto `main`
-  (`git rebase --onto main feat/p0-jobspec feat/p1-lan-mesh`).
-- `feat/e2e-multinode` (local only) is contained in `feat/p0-jobspec`; delete it once PR #4 merges.
+- `main` has Phase 0 (PR #4) and Phase 1 (PR #3).
+- `feat/p2-devices` → its own PR: Phase 2 (devices, mixed-device sync, profiles, planner,
+  throughput balancing, devices e2e). Stop for the user's review before starting Phase 3.
 - `gh`'s active account is `kunalavghade`; if a `gh` call is refused, check `gh auth status`.
 
 ### Done (do not redo)
@@ -94,6 +96,11 @@ in `docs/modules/`.
 Phase 1 is implemented and verified on one Mac and on minikube (see §10 status and
 `docs/modules/mesh.md`): `meshd`, `tm-agent`, tokens, CA + mTLS, liveness, scheduling,
 `trainmesh run --coordinator`, failure propagation.
+
+Phase 2 is implemented for CPU and Apple MPS (see §10 status and `docs/modules/devices.md`):
+device/precision selection, group-wide gradient sync (DDP or staged all-reduce), agent device
+profiles, islands, the coordinator planner, and per-epoch throughput re-splitting. CUDA, NCCL and
+ROCm are written and unit-tested but have never run.
 
 End-to-end tooling: `scripts/e2e/local.sh`, `scripts/e2e/minikube.sh`,
 `scripts/e2e/manual-node.sh`, `scripts/e2e/bench_config.py`, `scripts/e2e/compare.py` (+ tests),
@@ -200,12 +207,22 @@ Phase 1 is built. Read `docs/modules/mesh.md` first. Remaining, each a small PR 
 Rules: every new RPC goes into `methodRoles` (`internal/coordinator/auth.go`) or it is denied;
 regenerate with `make generate`; update `docs/modules/mesh.md`.
 
-## Task 5 — Phase 2 (GPU backends, profiler, heterogeneous batches)
+## Task 5 — Phase 2 leftovers (need hardware or the user)
 
-Start only after the user reviews Phase 1. Read architecture §5.4–5.6, §6 and §10 (P2). This Mac
-has Apple MPS (no NVIDIA/AMD): build and test the device abstraction for `cpu` and `mps`, write
-`cuda`/`rocm` paths with unit tests, and mark them "not verified on hardware". Ask the user
-before choosing the order of sub-steps.
+| # | Item | Done when |
+|---|------|-----------|
+| 5.1 | **CUDA smoke job** on an NVIDIA machine (ask the user) | `tm-agent --device cuda` reports a cuda profile and island `nccl-cuda`; a 1-machine and a 2-machine all-cuda job with `communication: auto` run on NCCL and match the CPU result within the e2e tolerances |
+| 5.2 | **ROCm smoke job** on an AMD machine (ask the user) | Same as 5.1 with a ROCm build of PyTorch (it reports `cuda`) |
+| 5.3 | **Heterogeneous physical run**: a GPU or Apple machine plus a CPU box | `balance: throughput` ends with step imbalance ≤ 1.10 and a higher samples/s than `balance: uniform`; record both in `docs/E2E_TESTING.md` |
+| 5.4 | Optional: several ranks on one GPU | Weight ranks by node throughput / ranks per node, or measure per rank; test in `planner_test.go` |
+
+## Task 6 — Phase 3 (`tmcomm` + DiLoCo across islands)
+
+Start only after the user reviews Phase 2. Read architecture §5.2, §5.5, §5.7–5.8, §7 and §10
+(P3). Level 1c showed why it matters: on loopback, ~3 s of a 4.7 s run is the per-step
+all-reduce. Suggested order (ask the user first): DiLoCo outer loop in Python over Gloo (fewer,
+larger syncs; measurable now) → Rust `tmcomm` crate with QUIC transport and int8 compression →
+`ProcessGroupTM` → `tc netem` WAN e2e.
 
 ## Reporting template (use after every task)
 

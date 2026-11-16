@@ -1,4 +1,4 @@
-# Mesh: coordinator, agents, membership and security (Phase 1)
+# Mesh: coordinator, agents, membership and security
 
 **Paths:** `cmd/meshd`, `cmd/tm-agent`, `internal/coordinator`, `internal/agent`,
 `internal/membership`, `internal/security`, `internal/store`,
@@ -27,7 +27,7 @@ flowchart LR
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
 | `meshd` | `internal/coordinator` | Admits machines, tracks liveness, schedules jobs, relays results. Owns the CA and the state file |
-| `tm-agent` | `internal/agent` | Joins once, heartbeats, runs this machine's part of a job via the launcher, reports outcome |
+| `tm-agent` | `internal/agent` | Joins once, benchmarks the devices it offers (`--device`), heartbeats, runs this machine's part of a job via the launcher, reports outcome |
 | Membership | `internal/membership` | Pure node lifecycle: states, legal transitions, heartbeat-age rule |
 | Security | `internal/security` | Join tokens, join strings, CA, certificates, TLS configs, caller identity |
 | Store | `internal/store` | Transactional persistence of tokens, nodes and jobs (one bbolt file) |
@@ -96,15 +96,19 @@ Defaults: heartbeat 2 s, `suspect_after` 6 s, `lost_after` 20 s, sweep every 1 s
 
 1. `trainmesh run --config job.yaml --coordinator host:7443` validates the config locally and
    calls `SubmitJob`.
-2. The scheduler (`pickNodes`) takes `execution.workers` READY nodes, ordered by ID, and
-   refuses mixed PyTorch/runtime versions. Node rank 0 is the first; its address becomes
-   `master_addr`, and `--rendezvous-port` (default 29500) the `master_port`. The job is
-   `RUNNING` and the nodes `BUSY`, in one transaction.
+2. The planner (`planJob`, [devices.md](devices.md)) keeps READY nodes that offer the job's
+   device; `pickNodes` takes `execution.workers` of them, ordered by ID, and refuses mixed
+   PyTorch/runtime versions. The planner resolves `communication: auto` for the whole group and,
+   for `balance: throughput`, splits the batch by measured throughput; both are written into the
+   config sent to the agents. Node rank 0 is the first; its address becomes `master_addr`, and
+   `--rendezvous-port` (default 29500) the `master_port`. The job is `RUNNING` and the nodes
+   `BUSY`, in one transaction.
 3. Each agent's next heartbeat carries a **Start** directive (repeated until the agent reports
    `RUNNING`, so a lost response is harmless; agents ignore duplicates). The agent writes the
    config into `jobs/<job-id>/`, and its `TorchRunner` launches
    `torchrun --nnodes=N --node_rank=r --nproc_per_node=… --master_addr=… --master_port=…`
-   with `GLOO_SOCKET_IFNAME` set to its interface. Output goes to `jobs/<job-id>/runtime.log`.
+   with `GLOO_SOCKET_IFNAME` set to its interface and `TRAINMESH_DEVICE` to the device it offers
+   (used by `device: auto`). Output goes to `jobs/<job-id>/runtime.log`.
 4. Agents report `RUNNING`, then `SUCCEEDED` (rank 0 attaches its result JSON) or `FAILED` /
    `CANCELLED`. Reports retry 5 times with backoff.
 5. The CLI polls `GetJob`, prints each change, and prints rank 0's result JSON on success.
@@ -148,8 +152,8 @@ Re-submit with `run.resume` once the cluster is healthy (automatic recovery is P
 meshd --listen 0.0.0.0:7443 --advertise 192.168.1.10:7443
 trainmesh token create --coordinator 192.168.1.10:7443   # prints a join string
 
-# every training machine (in a TrainMesh checkout with .venv)
-tm-agent --join 'trainmesh://192.168.1.10:7443?token=…&ca=…'
+# every training machine (in a TrainMesh checkout with .venv); --device defaults to auto
+tm-agent --join 'trainmesh://192.168.1.10:7443?token=…&ca=…' [--device cpu|mps|cuda]
 
 # machine A
 trainmesh nodes --coordinator 192.168.1.10:7443
@@ -168,6 +172,7 @@ machines for Gloo.
   token rules, join strings, real TLS handshakes incl. wrong CA and impersonation, store
   round trips and rollback).
 - `internal/coordinator/server_test.go`: deterministic scheduler and job-settlement tests.
+- `internal/coordinator/planner_test.go`: device filter, group-wide backend, batch split.
 - `internal/coordinator/mesh_test.go`: real `meshd` + real agents over mTLS in-process (fake
   training runner): join and run, single-use tokens, wrong CA, role checks, failure
   cancellation, a silent node going LOST, not enough nodes.

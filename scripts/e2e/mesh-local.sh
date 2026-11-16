@@ -15,86 +15,21 @@ PYTHON=${TRAINMESH_PYTHON:-$ROOT/.venv/bin/python}
 BIN=$ROOT/bin
 CLI=$BIN/trainmesh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/trainmesh-e2e-mesh.XXXXXX")
+E2E_TAG=e2e-mesh
 RANKS_PER_MACHINE=${RANKS_PER_MACHINE:-2}
-READY_TIMEOUT_SECONDS=60
 LOST_TIMEOUT_SECONDS=30
 LONG_JOB_EPOCHS=200
-declare -a PIDS=()
-declare -a AGENT_PIDS=()
-
-log() { printf '[e2e-mesh] %s\n' "$*"; }
-fail() {
-  printf '[e2e-mesh] FAIL: %s (logs in %s)\n' "$*" >&2
-  KEEP_WORK=1
-  exit 1
-}
-cleanup() {
-  for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
-  for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
-  pkill -f "$WORK/" 2>/dev/null || true
-  if [[ "${KEEP_WORK:-0}" == "1" ]]; then
-    echo "[e2e-mesh] work directory kept: $WORK"
-  else
-    rm -rf -- "$WORK"
-  fi
-}
+# shellcheck source=scripts/e2e/mesh-lib.sh
+source "$ROOT/scripts/e2e/mesh-lib.sh"
 trap cleanup EXIT
 
-free_port() { "$PYTHON" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
-
-# node_count STATE prints how many nodes are in STATE.
-node_count() {
-  "$CLI" nodes 2>/dev/null | "$PYTHON" -c 'import json, sys; print(sum(n["state"] == sys.argv[1] for n in json.load(sys.stdin)))' "$1"
-}
-
-wait_for_nodes() {
-  local state=$1 count=$2 timeout=$3 waited=0
-  until [[ "$(node_count "$state" || echo 0)" -ge "$count" ]]; do
-    ((waited < timeout)) || fail "expected $count node(s) $state within ${timeout}s"
-    sleep 1
-    waited=$((waited + 1))
-  done
-  log "ok: $count node(s) $state"
-}
-
-# with_topology RAW OUT SCENARIO MACHINES adds the topology block compare.py reads.
-with_topology() {
-  "$PYTHON" - "$@" <<'EOF'
-import json, sys
-raw, out, scenario, machines = sys.argv[1:]
-result = json.load(open(raw))
-result["topology"] = {"scenario": scenario, "machines": int(machines),
-                      "environment": "one Mac: meshd + tm-agents over loopback"}
-json.dump(result, open(out, "w"), indent=2)
-EOF
-}
-
 cd "$ROOT"
-log "building binaries"
-go build -o "$BIN/trainmesh" ./cmd/trainmesh
-go build -o "$BIN/meshd" ./cmd/meshd
-go build -o "$BIN/tm-agent" ./cmd/tm-agent
-
-PORT=$(free_port)
-RENDEZVOUS_PORT=$(free_port)
-export TRAINMESH_COORDINATOR="127.0.0.1:$PORT" TRAINMESH_ADMIN_DIR="$WORK/meshd"
-
-log "starting meshd on 127.0.0.1:$PORT"
-"$BIN/meshd" --state-dir "$WORK/meshd" --listen "127.0.0.1:$PORT" --advertise "127.0.0.1:$PORT" \
-  --rendezvous-port "$RENDEZVOUS_PORT" --heartbeat-interval 1s --suspect-after 3s --lost-after 6s \
-  >"$WORK/meshd.log" 2>&1 &
-PIDS+=($!)
-for _ in $(seq 1 20); do "$CLI" nodes >/dev/null 2>&1 && break || sleep 0.5; done
-"$CLI" nodes >/dev/null 2>&1 || fail "meshd did not come up (see meshd.log)"
+build_binaries
+start_meshd
 
 log "joining two agents"
-for i in 1 2; do
-  join=$("$CLI" token create --ttl 5m 2>/dev/null) || fail "token create failed"
-  "$BIN/tm-agent" --state-dir "$WORK/agent$i" --join "$join" >"$WORK/agent$i.log" 2>&1 &
-  PIDS+=($!)
-  AGENT_PIDS+=($!)
-  LAST_JOIN=$join
-done
+join_agent agent1
+join_agent agent2
 wait_for_nodes READY 2 "$READY_TIMEOUT_SECONDS"
 "$CLI" nodes >"$WORK/nodes.json"
 

@@ -1,4 +1,4 @@
-.PHONY: build generate test test-go test-python lint fmt demo e2e-local e2e-mesh-local e2e-minikube e2e-minikube-mesh e2e-minikube-down
+.PHONY: build generate test test-go test-python lint fmt demo e2e-local e2e-mesh-local e2e-devices-local e2e-minikube e2e-minikube-mesh e2e-minikube-down
 
 # trainmesh CLI, meshd coordinator and tm-agent.
 build:
@@ -47,6 +47,10 @@ e2e-minikube-down:
 # Phase 1 on one machine: meshd + 2 tm-agents, a job through `trainmesh run --coordinator`, failover.
 e2e-mesh-local:
 	scripts/e2e/mesh-local.sh
+
+# Phase 2 on an Apple Silicon Mac: one mps agent + one cpu agent, uniform vs throughput balance.
+e2e-devices-local:
+	scripts/e2e/devices-local.sh
 
 # Phase 1 on minikube: meshd + one tm-agent pod per node (needs the cluster from e2e-minikube).
 e2e-minikube-mesh:
