@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,19 @@ training:
   epochs: 1
   precision: fp32
 """
-TORCHRUN_TIMEOUT_SECONDS = 120
+RANK_TIMEOUT_SECONDS = 120
+WORLD_SIZE = 2
+
+
+@dataclass(frozen=True, slots=True)
+class TwoRankRun:
+    returncodes: list[int]
+    rank0_stdout: str
+    stderr: str
+
+    @property
+    def succeeded(self) -> bool:
+        return all(code == 0 for code in self.returncodes)
 
 
 def _write_config(path: Path, text: str) -> Path:
@@ -40,49 +53,62 @@ def _free_port() -> int:
         return listener.getsockname()[1]
 
 
-def _torchrun_two_ranks(config: Path, *runtime_args: str) -> subprocess.CompletedProcess[str]:
+def _rank_env(rank: int, master_port: int) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
-    env["OMP_NUM_THREADS"] = "1"
-    env["USE_LIBUV"] = "0"
+    env.update(
+        OMP_NUM_THREADS="1",
+        USE_LIBUV="0",
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(master_port),
+        RANK=str(rank),
+        LOCAL_RANK=str(rank),
+        WORLD_SIZE=str(WORLD_SIZE),
+        LOCAL_WORLD_SIZE=str(WORLD_SIZE),
+    )
     if sys.platform == "darwin":
         env.setdefault("GLOO_SOCKET_IFNAME", "lo0")
-    command = [
-        sys.executable,
-        "-m",
-        "torch.distributed.run",
-        "--nnodes=1",
-        "--node_rank=0",
-        "--nproc_per_node=2",
-        "--master_addr=127.0.0.1",
-        f"--master_port={_free_port()}",
-        "-m",
-        "trainmesh_runtime",
-        "--config",
-        str(config),
-        *runtime_args,
-    ]
+    return env
+
+
+def _run_two_ranks(config: Path, logs: Path, *runtime_args: str) -> TwoRankRun:
+    """Start both ranks directly with the env torchrun would set.
+
+    torchrun's agent reverse-resolves the host name at startup, which takes 35 s per lookup on
+    GitHub's macOS runners. The launcher path is covered by scripts/e2e/local.sh instead.
+    """
+    logs.mkdir(parents=True, exist_ok=True)
+    port = _free_port()
+    command = [sys.executable, "-m", "trainmesh_runtime", "--config", str(config), *runtime_args]
+    processes: list[subprocess.Popen[bytes]] = []
+    # Files, not pipes: a full pipe would block one rank while the other waits in a collective.
+    for rank in range(WORLD_SIZE):
+        with (
+            (logs / f"rank{rank}.out").open("wb") as out,
+            (logs / f"rank{rank}.err").open("wb") as err,
+        ):
+            processes.append(
+                subprocess.Popen(command, env=_rank_env(rank, port), stdout=out, stderr=err)
+            )
     try:
-        return subprocess.run(
-            command,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=TORCHRUN_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        pytest.fail(
-            f"torchrun timed out after {TORCHRUN_TIMEOUT_SECONDS}s\n"
-            f"--- stdout ---\n{_decode(exc.stdout)}\n--- stderr ---\n{_decode(exc.stderr)}"
-        )
+        returncodes = [p.wait(timeout=RANK_TIMEOUT_SECONDS) for p in processes]
+    except subprocess.TimeoutExpired:
+        for process in processes:
+            process.kill()
+            process.wait()
+        pytest.fail(f"ranks timed out after {RANK_TIMEOUT_SECONDS}s\n{_read_logs(logs)}")
+    return TwoRankRun(
+        returncodes=returncodes,
+        rank0_stdout=(logs / "rank0.out").read_text(encoding="utf-8", errors="replace"),
+        stderr=_read_logs(logs, suffix="err"),
+    )
 
 
-def _decode(output: bytes | str | None) -> str:
-    # TimeoutExpired always carries bytes, even with text=True.
-    if isinstance(output, bytes):
-        return output.decode("utf-8", errors="replace")
-    return output or ""
+def _read_logs(logs: Path, suffix: str = "*") -> str:
+    parts = []
+    for path in sorted(logs.glob(f"rank*.{suffix}")):
+        parts.append(f"--- {path.name} ---\n{path.read_text(encoding='utf-8', errors='replace')}")
+    return "\n".join(parts)
 
 
 def test_loads_supported_cpu_config(tmp_path: Path) -> None:
@@ -125,11 +151,11 @@ training:
 """,
     )
 
-    proc = _torchrun_two_ranks(config)
+    run = _run_two_ranks(config, tmp_path / "logs-first")
 
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert '"world_size": 2' in proc.stdout
-    assert '"parameters_consistent": true' in proc.stdout
+    assert run.succeeded, f"{run.returncodes}\n{run.rank0_stdout}\n{run.stderr}"
+    assert '"world_size": 2' in run.rank0_stdout
+    assert '"parameters_consistent": true' in run.rank0_stdout
     metadata = _read_metadata(checkpoint_dir)
     assert metadata["world_size"] == 2
     assert metadata["format_version"] == 2
@@ -143,9 +169,9 @@ training:
     config.write_text(
         config.read_text(encoding="utf-8").replace("epochs: 1", "epochs: 2"), encoding="utf-8"
     )
-    resumed = _torchrun_two_ranks(config, "--resume", str(checkpoint_dir))
+    resumed = _run_two_ranks(config, tmp_path / "logs-resume", "--resume", str(checkpoint_dir))
 
-    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert resumed.succeeded, f"{resumed.returncodes}\n{resumed.rank0_stdout}\n{resumed.stderr}"
     resumed_metadata = _read_metadata(checkpoint_dir)
     assert resumed_metadata["epoch"] == 2
     assert resumed_metadata["global_step"] == 8
