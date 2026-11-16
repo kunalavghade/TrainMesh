@@ -40,6 +40,17 @@ message Capabilities {
   uint64 memory_bytes = 5;
   string runtime_version = 6;
   string torch_version = 7;
+  // Device this machine trains on when a job asks for device=auto (its fastest offered one).
+  string device = 8;
+  // Measured reference-model throughput of every device this machine offers.
+  repeated DeviceProfile devices = 9;
+}
+
+message DeviceProfile {
+  // cpu, mps or cuda.
+  string kind = 1;
+  // Training samples per second of the reference model in one process (probe --benchmark).
+  double samples_per_second = 2;
 }
 
 message JoinRequest {
@@ -123,6 +134,8 @@ message Node {
   google.protobuf.Timestamp joined_at = 6;
   google.protobuf.Timestamp last_heartbeat = 7;
   string current_job_id = 8;
+  // Collective family the node belongs to: gloo-host (cpu, mps) or nccl-cuda.
+  string island = 9;
 }
 
 message ListNodesRequest {}
@@ -159,6 +172,10 @@ message Job {
   string error = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp finished_at = 11;
+  // Planned per-rank micro-batch sizes (empty when every rank gets per_rank).
+  repeated int32 rank_batch_sizes = 12;
+  // Collective backend the planner chose: gloo or nccl.
+  string communication = 13;
 }
 
 message GetJobRequest {

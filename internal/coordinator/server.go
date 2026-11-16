@@ -214,12 +214,12 @@ func (s *Server) SubmitJob(_ context.Context, req *trainmeshv1.SubmitJobRequest)
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	machines := parsed.WorldSize() / int(parsed.Spec.GetExecution().GetProcessesPerWorker())
+	ranksPerMachine := int(parsed.Spec.GetExecution().GetProcessesPerWorker())
 	job := store.Job{
 		ID:              newID("job"),
 		State:           store.JobRunning,
-		ConfigYAML:      req.GetConfigYaml(),
 		Machines:        machines,
-		RanksPerMachine: int(parsed.Spec.GetExecution().GetProcessesPerWorker()),
+		RanksPerMachine: ranksPerMachine,
 		MasterPort:      s.cfg.RendezvousPort,
 		CreatedAt:       s.cfg.Now(),
 	}
@@ -229,12 +229,13 @@ func (s *Server) SubmitJob(_ context.Context, req *trainmeshv1.SubmitJobRequest)
 		if err != nil {
 			return err
 		}
-		chosen, err := pickNodes(nodes, machines)
+		planned, err := planJob(parsed.Spec, nodes, machines, ranksPerMachine)
 		if err != nil {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
-		job.MasterAddr = chosen[0].Address
-		for rank, node := range chosen {
+		job.ConfigYAML, job.Communication, job.RankBatchSizes = planned.configYAML, planned.communication, planned.rankBatchSizes
+		job.MasterAddr = planned.nodes[0].Address
+		for rank, node := range planned.nodes {
 			job.Assignments = append(job.Assignments, store.Assignment{NodeID: node.ID, NodeRank: rank, State: store.JobPending})
 			if node.State, err = membership.Transition(node.State, membership.StateBusy); err != nil {
 				return err
@@ -249,7 +250,8 @@ func (s *Server) SubmitJob(_ context.Context, req *trainmeshv1.SubmitJobRequest)
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	s.logger.Info("job submitted", "job", job.ID, "machines", machines, "master", job.MasterAddr)
+	s.logger.Info("job submitted", "job", job.ID, "machines", machines, "master", job.MasterAddr,
+		"communication", job.Communication, "rank_batch_sizes", job.RankBatchSizes)
 	return &trainmeshv1.SubmitJobResponse{JobId: job.ID}, nil
 }
 

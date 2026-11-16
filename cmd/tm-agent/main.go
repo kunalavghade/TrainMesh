@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 
 	"github.com/trainmesh/trainmesh/internal/agent"
@@ -24,16 +25,23 @@ func main() {
 	join := flag.String("join", "", "join string from `trainmesh token create` (first start only)")
 	address := flag.String("address", "", "IP other machines use to reach this one (default: route to the coordinator)")
 	iface := flag.String("interface", "", "network interface for training traffic (default: the one owning --address)")
+	device := flag.String("device", "auto", "device offered to the mesh: auto (fastest measured), cpu, mps or cuda")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(*stateDir, *join, *address, *iface, logger); err != nil {
+	if !slices.Contains(offerableDevices, *device) {
+		fmt.Fprintf(os.Stderr, "tm-agent: --device must be one of %v\n", offerableDevices)
+		os.Exit(2)
+	}
+	if err := run(*stateDir, *join, *address, *iface, *device, logger); err != nil {
 		fmt.Fprintln(os.Stderr, "tm-agent:", err)
 		os.Exit(1)
 	}
 }
 
-func run(stateDir, join, address, iface string, logger *slog.Logger) error {
+var offerableDevices = []string{"auto", "cpu", "mps", "cuda"}
+
+func run(stateDir, join, address, iface, device string, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -53,7 +61,7 @@ func run(stateDir, join, address, iface string, logger *slog.Logger) error {
 		Address:    address,
 		Interface:  iface,
 		Capabilities: func(ctx context.Context) (*trainmeshv1.Capabilities, error) {
-			return agent.ProbeCapabilities(ctx, rt)
+			return agent.ProbeCapabilities(ctx, rt, device)
 		},
 		Runner: runner,
 		Logger: logger,
@@ -64,7 +72,7 @@ func run(stateDir, join, address, iface string, logger *slog.Logger) error {
 	if err := a.Start(ctx); err != nil {
 		return err
 	}
-	runner.Interface = a.Interface()
+	runner.Interface, runner.Device = a.Interface(), a.Device()
 	err = a.Run(ctx)
 	if errors.Is(err, context.Canceled) {
 		return nil

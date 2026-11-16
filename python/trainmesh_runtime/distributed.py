@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 import torch.distributed as dist
@@ -19,6 +19,8 @@ class DistContext:
     world_size: int
     local_rank: int
     local_world_size: int
+    # Where tensors must live for this process group's collectives (CUDA for NCCL).
+    collective_device: torch.device = field(default_factory=lambda: torch.device("cpu"))
 
     @property
     def is_distributed(self) -> bool:
@@ -39,12 +41,16 @@ def context_from_env() -> DistContext:
     )
 
 
-def init_process_group(ctx: DistContext) -> None:
+def init_process_group(ctx: DistContext, backend: str = "gloo") -> None:
     if not ctx.is_distributed:
         return
-    if not dist.is_available() or not dist.is_gloo_available():
-        raise ConfigError("installed PyTorch does not provide the Gloo process-group backend")
-    dist.init_process_group(backend="gloo", init_method="env://")
+    available = {
+        "gloo": dist.is_available() and dist.is_gloo_available(),
+        "nccl": dist.is_available() and dist.is_nccl_available(),
+    }
+    if not available.get(backend, False):
+        raise ConfigError(f"installed PyTorch does not provide the {backend} process-group backend")
+    dist.init_process_group(backend=backend, init_method="env://")
 
 
 def destroy_process_group() -> None:
@@ -59,24 +65,27 @@ def barrier(ctx: DistContext) -> None:
 
 def all_reduce_sum_(tensor: torch.Tensor, ctx: DistContext) -> torch.Tensor:
     if ctx.is_distributed:
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        buffer = tensor.to(ctx.collective_device)
+        dist.all_reduce(buffer, op=dist.ReduceOp.SUM)
+        tensor.copy_(buffer)
     return tensor
 
 
 def max_across_ranks(value: float, ctx: DistContext) -> float:
-    tensor = torch.tensor([value], dtype=torch.float64)
+    tensor = torch.tensor([value], dtype=torch.float64, device=ctx.collective_device)
     if ctx.is_distributed:
         dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
     return float(tensor.item())
 
 
 def all_gather_fixed(tensor: torch.Tensor, ctx: DistContext) -> list[torch.Tensor]:
-    """Gather an equally shaped tensor from every rank, in rank order."""
+    """Gather an equally shaped tensor from every rank, in rank order (results on CPU)."""
     if not ctx.is_distributed:
         return [tensor]
-    gathered = [torch.empty_like(tensor) for _ in range(ctx.world_size)]
-    dist.all_gather(gathered, tensor.contiguous())
-    return gathered
+    local = tensor.contiguous().to(ctx.collective_device)
+    gathered = [torch.empty_like(local) for _ in range(ctx.world_size)]
+    dist.all_gather(gathered, local)
+    return [t.cpu() for t in gathered]
 
 
 def assert_replicas_identical(digest_hex: str, ctx: DistContext) -> None:

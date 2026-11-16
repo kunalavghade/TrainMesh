@@ -11,7 +11,8 @@ code changes, update the document that owns that topic.
 | [modules/config.md](modules/config.md) | The single job schema (`jobspec.proto`), its rules, and loading in Go and Python | The schema changes |
 | [modules/launcher.md](modules/launcher.md) | How ranks are started, supervised and stopped | Launch behaviour changes |
 | [modules/runtime.md](modules/runtime.md) | The Python training runtime: data, DDP training, validation, checkpoints, results | Runtime changes |
-| [modules/mesh.md](modules/mesh.md) | The Phase 1 mesh: `meshd`, `tm-agent`, joining, liveness, job flow, failure handling, security, how to operate it | Coordinator, agent or security changes |
+| [modules/devices.md](modules/devices.md) | Phase 2: devices, precision, collective backend, gradient sync for mixed devices, throughput profiles, planner and per-epoch batch re-split | Device, sync, probe, planner or balancing changes |
+| [modules/mesh.md](modules/mesh.md) | The mesh: `meshd`, `tm-agent`, joining, liveness, job flow, failure handling, security, how to operate it | Coordinator, agent or security changes |
 | [CPU_BACKEND.md](CPU_BACKEND.md) | Installing and running on CPU (macOS and Linux), tuning, config changes per release | Setup or defaults change |
 | [E2E_TESTING.md](E2E_TESTING.md) | End-to-end tests and the 1-machine vs multi-machine proof (local, minikube, physical) | Tests or measured results change |
 | [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) | What is implemented, with evidence, and what is not | Every merged change |

@@ -14,7 +14,10 @@ import torch.distributed as dist  # noqa: E402
 from torch.nn.parallel import DistributedDataParallel  # noqa: E402
 from torch.utils.data import DataLoader, TensorDataset  # noqa: E402
 
-from trainmesh_runtime.runtime import MLP, train_epoch  # noqa: E402
+from trainmesh_runtime.devices import DeviceChoice  # noqa: E402
+from trainmesh_runtime.distributed import DistContext  # noqa: E402
+from trainmesh_runtime.runtime import MLP, StepPlan, train_epoch  # noqa: E402
+from trainmesh_runtime.sync import DDPSync  # noqa: E402
 
 INPUT_SIZE, HIDDEN_SIZE, OUTPUT_SIZE = 8, 16, 3
 
@@ -38,6 +41,20 @@ def _loader(samples: int, batch_size: int) -> DataLoader:
     features = torch.randn(samples, INPUT_SIZE, generator=generator)
     target = torch.randint(OUTPUT_SIZE, (samples,), generator=generator)
     return DataLoader(TensorDataset(features, target), batch_size=batch_size, shuffle=False)
+
+
+def _ddp_plan(accumulation_steps: int, batch: int) -> StepPlan:
+    cpu = DeviceChoice(
+        device=torch.device("cpu"), collective_backend="gloo", autocast_dtype=None, precision="fp32"
+    )
+    ctx = DistContext(rank=0, world_size=1, local_rank=0, local_world_size=1)
+    return StepPlan(
+        device=cpu.device,
+        sync=DDPSync(ctx, cpu),
+        accumulation_steps=accumulation_steps,
+        local_batch=batch,
+        global_batch=batch,
+    )
 
 
 def _ddp_model_with_counter() -> tuple[DistributedDataParallel, dict[str, int]]:
@@ -71,7 +88,7 @@ def test_all_reduce_runs_once_per_optimizer_step(
     criterion = torch.nn.CrossEntropyLoss(reduction="sum")
 
     stats = train_epoch(
-        model, _loader(batches * 4, 4), optimizer, criterion, accumulation_steps=accumulation_steps
+        model, _loader(batches * 4, 4), optimizer, criterion, _ddp_plan(accumulation_steps, 4)
     )
 
     assert stats.optimizer_steps == expected_steps
@@ -90,14 +107,14 @@ def test_accumulated_step_matches_one_large_batch() -> None:
         _loader(16, 4),
         torch.optim.SGD(accumulated.parameters(), lr=0.1),
         criterion,
-        accumulation_steps=4,
+        _ddp_plan(4, 4),
     )
     train_epoch(
         large_batch,
         _loader(16, 16),
         torch.optim.SGD(large_batch.parameters(), lr=0.1),
         criterion,
-        accumulation_steps=1,
+        _ddp_plan(1, 16),
     )
 
     for left, right in zip(accumulated.parameters(), large_batch.parameters(), strict=True):

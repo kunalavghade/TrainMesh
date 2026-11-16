@@ -54,18 +54,36 @@ message Execution {
   int32 cpu_threads_per_rank = 4 [(buf.validate.field).int32.gte = 0];
   Backend backend = 5 [(buf.validate.field).required = true];
   Rendezvous rendezvous = 6;
+  // ddp: PyTorch DDP (overlaps communication with backward; CPU and CUDA only).
+  // allreduce: one flattened all-reduce per optimizer step, staged through CPU memory when the
+  // device cannot use the collective backend (MPS); needed for unequal per-rank batches.
+  // Empty or auto: ddp when possible, otherwise allreduce.
+  string gradient_sync = 7 [(buf.validate.field).cel = {
+    id: "execution.gradient_sync"
+    message: "execution.gradient_sync must be auto, ddp or allreduce"
+    expression: "this in ['', 'auto', 'ddp', 'allreduce']"
+  }];
 }
 
 message Backend {
+  option (buf.validate.message).cel = {
+    id: "execution.backend.nccl_needs_cuda"
+    message: "communication=nccl needs device=cuda (NCCL cannot move CPU or MPS tensors); use gloo or auto"
+    expression: "this.communication != 'nccl' || this.device == 'cuda'"
+  };
+  // cpu, mps (Apple GPU), cuda (NVIDIA; AMD ROCm builds of PyTorch also report cuda), or auto:
+  // each machine uses the best device it offers (cuda, then mps, then cpu).
   string device = 1 [(buf.validate.field).cel = {
     id: "execution.backend.device"
-    message: "this release supports device=cpu only; CUDA/NCCL is not available"
-    expression: "this == 'cpu'"
+    message: "execution.backend.device must be cpu, mps, cuda or auto"
+    expression: "this in ['cpu', 'mps', 'cuda', 'auto']"
   }];
+  // gloo works with every device (MPS gradients are staged through CPU memory); nccl only with
+  // cuda; auto lets the coordinator pick nccl when every chosen machine uses cuda, else gloo.
   string communication = 2 [(buf.validate.field).cel = {
     id: "execution.backend.communication"
-    message: "this release supports communication=gloo only"
-    expression: "this == 'gloo'"
+    message: "execution.backend.communication must be gloo, nccl or auto"
+    expression: "this in ['gloo', 'nccl', 'auto']"
   }];
 }
 
@@ -81,11 +99,12 @@ message Training {
   Optimizer optimizer = 3;
   Batch batch = 4 [(buf.validate.field).required = true];
   int32 epochs = 5 [(buf.validate.field).int32.gt = 0];
-  // Empty means fp32.
+  // Empty means fp32. bf16/fp16 use autocast (fp16 adds a gradient scaler). auto picks bf16 on
+  // CUDA devices that support it and fp32 elsewhere: on the measured Apple CPU bf16 was 16x slower.
   string precision = 6 [(buf.validate.field).cel = {
     id: "training.precision"
-    message: "only fp32 precision is currently supported"
-    expression: "this in ['', 'fp32']"
+    message: "training.precision must be fp32, bf16, fp16 or auto"
+    expression: "this in ['', 'fp32', 'bf16', 'fp16', 'auto']"
   }];
   Checkpoint checkpoint = 7;
   Validation validation = 8;
@@ -130,9 +149,21 @@ message Optimizer {
 }
 
 message Batch {
+  // Samples per rank per micro-batch when every rank gets the same share. The global batch is
+  // always per_rank x world_size x gradient_accumulation_steps.
   int32 per_rank = 1 [(buf.validate.field).int32.gt = 0];
   // Zero means 1.
   int32 gradient_accumulation_steps = 2 [(buf.validate.field).int32.gte = 0];
+  // uniform (default): every rank gets per_rank. throughput: the coordinator splits the same
+  // global batch in proportion to each machine's measured throughput.
+  string balance = 3 [(buf.validate.field).cel = {
+    id: "training.batch.balance"
+    message: "training.batch.balance must be uniform or throughput"
+    expression: "this in ['', 'uniform', 'throughput']"
+  }];
+  // Explicit per-rank micro-batch sizes in rank order, normally filled by the coordinator. Must
+  // have one entry per rank and sum to per_rank x world_size.
+  repeated int32 rank_batch_sizes = 4 [(buf.validate.field).repeated.items.int32.gt = 0];
 }
 
 message Checkpoint {

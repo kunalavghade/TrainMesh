@@ -10,7 +10,7 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Capabilities(_message.Message):
-    __slots__ = ("hostname", "os", "arch", "logical_cpus", "memory_bytes", "runtime_version", "torch_version")
+    __slots__ = ("hostname", "os", "arch", "logical_cpus", "memory_bytes", "runtime_version", "torch_version", "device", "devices")
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     OS_FIELD_NUMBER: _ClassVar[int]
     ARCH_FIELD_NUMBER: _ClassVar[int]
@@ -18,6 +18,8 @@ class Capabilities(_message.Message):
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
     TORCH_VERSION_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_FIELD_NUMBER: _ClassVar[int]
+    DEVICES_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     os: str
     arch: str
@@ -25,7 +27,17 @@ class Capabilities(_message.Message):
     memory_bytes: int
     runtime_version: str
     torch_version: str
-    def __init__(self, hostname: _Optional[str] = ..., os: _Optional[str] = ..., arch: _Optional[str] = ..., logical_cpus: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., runtime_version: _Optional[str] = ..., torch_version: _Optional[str] = ...) -> None: ...
+    device: str
+    devices: _containers.RepeatedCompositeFieldContainer[DeviceProfile]
+    def __init__(self, hostname: _Optional[str] = ..., os: _Optional[str] = ..., arch: _Optional[str] = ..., logical_cpus: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., runtime_version: _Optional[str] = ..., torch_version: _Optional[str] = ..., device: _Optional[str] = ..., devices: _Optional[_Iterable[_Union[DeviceProfile, _Mapping]]] = ...) -> None: ...
+
+class DeviceProfile(_message.Message):
+    __slots__ = ("kind", "samples_per_second")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    SAMPLES_PER_SECOND_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    samples_per_second: float
+    def __init__(self, kind: _Optional[str] = ..., samples_per_second: _Optional[float] = ...) -> None: ...
 
 class JoinRequest(_message.Message):
     __slots__ = ("token", "csr_der")
@@ -134,7 +146,7 @@ class CreateTokenResponse(_message.Message):
     def __init__(self, join_string: _Optional[str] = ..., expires_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class Node(_message.Message):
-    __slots__ = ("id", "state", "address", "interface", "capabilities", "joined_at", "last_heartbeat", "current_job_id")
+    __slots__ = ("id", "state", "address", "interface", "capabilities", "joined_at", "last_heartbeat", "current_job_id", "island")
     ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     ADDRESS_FIELD_NUMBER: _ClassVar[int]
@@ -143,6 +155,7 @@ class Node(_message.Message):
     JOINED_AT_FIELD_NUMBER: _ClassVar[int]
     LAST_HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
     CURRENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    ISLAND_FIELD_NUMBER: _ClassVar[int]
     id: str
     state: str
     address: str
@@ -151,7 +164,8 @@ class Node(_message.Message):
     joined_at: _timestamp_pb2.Timestamp
     last_heartbeat: _timestamp_pb2.Timestamp
     current_job_id: str
-    def __init__(self, id: _Optional[str] = ..., state: _Optional[str] = ..., address: _Optional[str] = ..., interface: _Optional[str] = ..., capabilities: _Optional[_Union[Capabilities, _Mapping]] = ..., joined_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., last_heartbeat: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., current_job_id: _Optional[str] = ...) -> None: ...
+    island: str
+    def __init__(self, id: _Optional[str] = ..., state: _Optional[str] = ..., address: _Optional[str] = ..., interface: _Optional[str] = ..., capabilities: _Optional[_Union[Capabilities, _Mapping]] = ..., joined_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., last_heartbeat: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., current_job_id: _Optional[str] = ..., island: _Optional[str] = ...) -> None: ...
 
 class ListNodesRequest(_message.Message):
     __slots__ = ()
@@ -188,7 +202,7 @@ class Assignment(_message.Message):
     def __init__(self, node_id: _Optional[str] = ..., node_rank: _Optional[int] = ..., state: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class Job(_message.Message):
-    __slots__ = ("id", "state", "machines", "ranks_per_machine", "master_addr", "master_port", "assignments", "result_json", "error", "created_at", "finished_at")
+    __slots__ = ("id", "state", "machines", "ranks_per_machine", "master_addr", "master_port", "assignments", "result_json", "error", "created_at", "finished_at", "rank_batch_sizes", "communication")
     ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     MACHINES_FIELD_NUMBER: _ClassVar[int]
@@ -200,6 +214,8 @@ class Job(_message.Message):
     ERROR_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
+    RANK_BATCH_SIZES_FIELD_NUMBER: _ClassVar[int]
+    COMMUNICATION_FIELD_NUMBER: _ClassVar[int]
     id: str
     state: str
     machines: int
@@ -211,7 +227,9 @@ class Job(_message.Message):
     error: str
     created_at: _timestamp_pb2.Timestamp
     finished_at: _timestamp_pb2.Timestamp
-    def __init__(self, id: _Optional[str] = ..., state: _Optional[str] = ..., machines: _Optional[int] = ..., ranks_per_machine: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., assignments: _Optional[_Iterable[_Union[Assignment, _Mapping]]] = ..., result_json: _Optional[bytes] = ..., error: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    rank_batch_sizes: _containers.RepeatedScalarFieldContainer[int]
+    communication: str
+    def __init__(self, id: _Optional[str] = ..., state: _Optional[str] = ..., machines: _Optional[int] = ..., ranks_per_machine: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., assignments: _Optional[_Iterable[_Union[Assignment, _Mapping]]] = ..., result_json: _Optional[bytes] = ..., error: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., rank_batch_sizes: _Optional[_Iterable[int]] = ..., communication: _Optional[str] = ...) -> None: ...
 
 class GetJobRequest(_message.Message):
     __slots__ = ("job_id",)

@@ -16,13 +16,47 @@ var ErrNotFound = errors.New("record not found")
 
 // Capabilities is what an agent reports about its machine.
 type Capabilities struct {
-	Hostname       string `json:"hostname"`
-	OS             string `json:"os"`
-	Arch           string `json:"arch"`
-	LogicalCPUs    int    `json:"logical_cpus"`
-	MemoryBytes    uint64 `json:"memory_bytes"`
-	RuntimeVersion string `json:"runtime_version"`
-	TorchVersion   string `json:"torch_version"`
+	Hostname       string          `json:"hostname"`
+	OS             string          `json:"os"`
+	Arch           string          `json:"arch"`
+	LogicalCPUs    int             `json:"logical_cpus"`
+	MemoryBytes    uint64          `json:"memory_bytes"`
+	RuntimeVersion string          `json:"runtime_version"`
+	TorchVersion   string          `json:"torch_version"`
+	Device         string          `json:"device"`
+	Devices        []DeviceProfile `json:"devices,omitempty"`
+}
+
+// DeviceProfile is a measured throughput of one device kind on a node.
+type DeviceProfile struct {
+	Kind             string  `json:"kind"`
+	SamplesPerSecond float64 `json:"samples_per_second"`
+}
+
+// Throughput returns the measured samples/s of kind ("auto" means the node's own device).
+func (c Capabilities) Throughput(kind string) (float64, bool) {
+	if kind == "auto" {
+		kind = c.Device
+	}
+	for _, profile := range c.Devices {
+		if profile.Kind == kind {
+			return profile.SamplesPerSecond, true
+		}
+	}
+	return 0, false
+}
+
+// Offers reports whether the node can train on kind. "auto" is always offered; a node that
+// reported no device (an agent older than device profiling) is assumed to offer only cpu.
+func (c Capabilities) Offers(kind string) bool {
+	switch {
+	case kind == "auto" || kind == c.Device:
+		return true
+	case c.Device == "":
+		return kind == "cpu"
+	}
+	_, ok := c.Throughput(kind)
+	return ok
 }
 
 // Node is one machine that joined the cluster.
@@ -71,6 +105,8 @@ type Job struct {
 	RanksPerMachine int             `json:"ranks_per_machine"`
 	MasterAddr      string          `json:"master_addr,omitempty"`
 	MasterPort      int             `json:"master_port,omitempty"`
+	Communication   string          `json:"communication,omitempty"`
+	RankBatchSizes  []int           `json:"rank_batch_sizes,omitempty"`
 	Assignments     []Assignment    `json:"assignments,omitempty"`
 	Result          json.RawMessage `json:"result,omitempty"`
 	Error           string          `json:"error,omitempty"`

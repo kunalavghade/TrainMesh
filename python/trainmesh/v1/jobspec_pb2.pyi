@@ -1,8 +1,9 @@
 from buf.validate import validate_pb2 as _validate_pb2
 from google.protobuf import struct_pb2 as _struct_pb2
+from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from collections.abc import Mapping as _Mapping
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
@@ -42,20 +43,22 @@ class Run(_message.Message):
     def __init__(self, name: _Optional[str] = ..., seed: _Optional[int] = ..., resume: _Optional[str] = ..., results_path: _Optional[str] = ...) -> None: ...
 
 class Execution(_message.Message):
-    __slots__ = ("strategy", "workers", "processes_per_worker", "cpu_threads_per_rank", "backend", "rendezvous")
+    __slots__ = ("strategy", "workers", "processes_per_worker", "cpu_threads_per_rank", "backend", "rendezvous", "gradient_sync")
     STRATEGY_FIELD_NUMBER: _ClassVar[int]
     WORKERS_FIELD_NUMBER: _ClassVar[int]
     PROCESSES_PER_WORKER_FIELD_NUMBER: _ClassVar[int]
     CPU_THREADS_PER_RANK_FIELD_NUMBER: _ClassVar[int]
     BACKEND_FIELD_NUMBER: _ClassVar[int]
     RENDEZVOUS_FIELD_NUMBER: _ClassVar[int]
+    GRADIENT_SYNC_FIELD_NUMBER: _ClassVar[int]
     strategy: str
     workers: int
     processes_per_worker: int
     cpu_threads_per_rank: int
     backend: Backend
     rendezvous: Rendezvous
-    def __init__(self, strategy: _Optional[str] = ..., workers: _Optional[int] = ..., processes_per_worker: _Optional[int] = ..., cpu_threads_per_rank: _Optional[int] = ..., backend: _Optional[_Union[Backend, _Mapping]] = ..., rendezvous: _Optional[_Union[Rendezvous, _Mapping]] = ...) -> None: ...
+    gradient_sync: str
+    def __init__(self, strategy: _Optional[str] = ..., workers: _Optional[int] = ..., processes_per_worker: _Optional[int] = ..., cpu_threads_per_rank: _Optional[int] = ..., backend: _Optional[_Union[Backend, _Mapping]] = ..., rendezvous: _Optional[_Union[Rendezvous, _Mapping]] = ..., gradient_sync: _Optional[str] = ...) -> None: ...
 
 class Backend(_message.Message):
     __slots__ = ("device", "communication")
@@ -126,12 +129,16 @@ class Optimizer(_message.Message):
     def __init__(self, name: _Optional[str] = ..., learning_rate: _Optional[float] = ...) -> None: ...
 
 class Batch(_message.Message):
-    __slots__ = ("per_rank", "gradient_accumulation_steps")
+    __slots__ = ("per_rank", "gradient_accumulation_steps", "balance", "rank_batch_sizes")
     PER_RANK_FIELD_NUMBER: _ClassVar[int]
     GRADIENT_ACCUMULATION_STEPS_FIELD_NUMBER: _ClassVar[int]
+    BALANCE_FIELD_NUMBER: _ClassVar[int]
+    RANK_BATCH_SIZES_FIELD_NUMBER: _ClassVar[int]
     per_rank: int
     gradient_accumulation_steps: int
-    def __init__(self, per_rank: _Optional[int] = ..., gradient_accumulation_steps: _Optional[int] = ...) -> None: ...
+    balance: str
+    rank_batch_sizes: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, per_rank: _Optional[int] = ..., gradient_accumulation_steps: _Optional[int] = ..., balance: _Optional[str] = ..., rank_batch_sizes: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class Checkpoint(_message.Message):
     __slots__ = ("enabled", "directory")

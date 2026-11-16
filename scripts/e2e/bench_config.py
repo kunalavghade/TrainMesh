@@ -26,7 +26,7 @@ run:
   results_path: "{results_path}"
 execution:
   strategy: data_parallel
-  backend: {{device: cpu, communication: gloo}}
+  backend: {{device: {device}, communication: {communication}}}
   workers: {machines}
   processes_per_worker: {ranks_per_machine}
 training:
@@ -41,7 +41,7 @@ training:
     input_size: {input_size}
     output_size: {output_size}
   optimizer: {{name: adam, learning_rate: 0.001}}
-  batch: {{per_rank: {per_rank}, gradient_accumulation_steps: 1}}
+  batch: {{per_rank: {per_rank}, gradient_accumulation_steps: 1, balance: {balance}}}
   epochs: {epochs}
   precision: fp32
   checkpoint: {{enabled: {checkpoint_enabled}, directory: {checkpoint_dir}}}
@@ -74,6 +74,9 @@ def render(args: argparse.Namespace) -> str:
         checkpoint_enabled="true" if args.checkpoint_dir else "false",
         checkpoint_dir=args.checkpoint_dir or "./checkpoints",
         results_path=args.results_path,
+        device=args.device,
+        communication=args.communication,
+        balance=args.balance,
     )
 
 
@@ -92,6 +95,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--validation-samples", type=int, default=DEFAULT_VALIDATION_SAMPLES)
     parser.add_argument("--checkpoint-dir", default="", help="empty disables checkpoints")
     parser.add_argument("--results-path", default="", help="rank 0 writes its result JSON here")
+    parser.add_argument("--device", choices=["cpu", "mps", "cuda", "auto"], default="cpu")
+    parser.add_argument("--communication", choices=["gloo", "nccl", "auto"], default="gloo")
+    parser.add_argument(
+        "--balance",
+        choices=["uniform", "throughput"],
+        default="uniform",
+        help="throughput: the coordinator sizes per-rank batches by measured speed",
+    )
     return parser.parse_args(argv)
 
 

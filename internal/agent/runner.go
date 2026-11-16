@@ -40,7 +40,11 @@ type TorchRunner struct {
 	Runtime   launcher.Runtime
 	JobsDir   string
 	Interface string // NIC for Gloo; set from route detection
+	Device    string // device offered to the mesh; used by jobs that ask for device=auto
 }
+
+// deviceEnv tells the runtime which device `device: auto` means on this machine.
+const deviceEnv = "TRAINMESH_DEVICE"
 
 // Run writes the config, launches this node's ranks and waits. Output goes to runtime.log.
 func (r TorchRunner) Run(ctx context.Context, a Assignment) ([]byte, error) {
@@ -79,7 +83,11 @@ func (r TorchRunner) Run(ctx context.Context, a Assignment) ([]byte, error) {
 		Stdout:         logFile,
 		Stderr:         logFile,
 	}
-	if err := launcher.Run(ctx, spec, os.Environ(), runtime.GOOS); err != nil {
+	env := os.Environ()
+	if r.Device != "" {
+		env = append(env, deviceEnv+"="+r.Device)
+	}
+	if err := launcher.Run(ctx, spec, env, runtime.GOOS); err != nil {
 		return nil, fmt.Errorf("%w (log: %s)", err, logFile.Name())
 	}
 	if a.NodeRank != 0 {

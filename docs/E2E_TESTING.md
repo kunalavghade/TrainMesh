@@ -7,6 +7,7 @@ use mocks.
 |-------|---------|----------------|------------|
 | 1. Local CLI | `make e2e-local` | The `trainmesh` binary works end to end on one machine | Yes (`e2e` job, Linux) |
 | 1b. Local mesh | `make e2e-mesh-local` | `meshd` + 2 `tm-agent`s on one machine: join, train through `trainmesh run --coordinator`, same model as 1 machine, a killed agent fails the job and goes LOST | Yes (`e2e` job, Linux) |
+| 1c. Mixed devices | `make e2e-devices-local` | An mps agent and a cpu agent on one Apple Silicon Mac: profiles and islands reported, one job across both devices reaches the same model as 1 CPU machine, `balance: throughput` ends balanced | No (needs MPS; skips elsewhere) |
 | 2. minikube multi-node | `make e2e-minikube` | Training across 2 kubernetes nodes reaches the same model as 1 node (torchrun started by Kubernetes); measures overhead | No (needs Docker + minikube) |
 | 2b. minikube mesh | `make e2e-minikube-mesh` | `meshd` + one `tm-agent` pod per kubernetes node; the Phase 1 path over a real pod network | No (needs Docker + minikube) |
 | 3. Physical machines | `scripts/e2e/manual-node.sh`, or `meshd` + `tm-agent` as in [modules/mesh.md](modules/mesh.md) | Real 1-machine vs multi-machine speed over your network | No (manual) |
@@ -196,6 +197,48 @@ Measured on the development Mac (2026-11-16):
 | 2 machines × 2 ranks via the CLI vs 1 machine × 4 ranks | identical final loss 0.101882 and validation accuracy **91.70%** |
 | `kill -9` an agent mid-job | job FAILED ("node lost (no heartbeats)"), node LOST, survivor READY |
 
+## Level 1c — mixed devices on one Mac (Phase 2)
+
+```bash
+make e2e-devices-local  # = scripts/e2e/devices-local.sh; KEEP_WORK=1 keeps logs and state
+```
+
+Needs an Apple Silicon Mac (prints SKIP elsewhere). Starts `meshd` and two agents,
+`tm-agent --device mps` and `tm-agent --device cpu`; each benchmarks its device at start. Checks
+`trainmesh nodes` shows one `mps` and one `cpu` node, both in island `gloo-host`, each with a
+measured throughput. Then runs one job across both (`device: auto`, `communication: auto`,
+MLP 256-4096-10, global batch 1024, 4 epochs) twice, with `balance: uniform` and
+`balance: throughput`, plus the same job on one CPU rank. Requires: the coordinator picked
+`gloo`; mixed devices were detected; the coordinator's first split gave the mps rank the larger
+batch (from the profiles); both mesh runs match the one-machine loss and accuracy
+(`compare.py`); and the throughput run's last epoch is balanced to within 1.25×
+(`MAX_FINAL_IMBALANCE`).
+
+Measured on the development Mac (2026-11-17), two consecutive runs:
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| Probe (one process, staged step) | mps ≈ 150–185k, cpu ≈ 100k samples/s | same |
+| 1 CPU rank: loss / accuracy | 0.060631 / 93.87% | 0.060631 / 93.87% |
+| cpu+mps, uniform: loss / accuracy | 0.060632 / 93.82% | 0.060632 / 93.82% |
+| cpu+mps, throughput: loss / accuracy | 0.060629 / 93.82% | 0.060631 / 93.85% |
+| Throughput split per epoch (cpu, mps) | 457/567 → 506/518 → 506/518 → 506/518 | 453/571 → 496/528 → 496/528 → 496/528 |
+| Step-time imbalance per epoch | 1.21 → 1.01 → 1.04 → 1.02 | 1.18 → 1.05 → 1.06 → 1.08 |
+| Parameter drift before realignment | 3e-8 | 3e-8 |
+
+What this shows: the probe ranked MPS ~1.7× faster, so the coordinator gave it more; on the real
+job the two ranks were about equally fast (both agents share this Mac's CPU, and per-step host
+staging costs MPS time), and after one measured epoch the runtime moved the split to match and
+then held it. The mesh is slower than one machine here (≈ 55k vs 104k samples/s): of each
+~4.7 s run, every rank spends ~3 s in the per-step all-reduce of 4.4 MB of gradients over
+loopback, and both "machines" share one CPU. This level proves correctness and the balancing mechanism, not a speed-up; real gains need
+machines with different hardware (pending, see "Not covered yet").
+
+The first version of this test used the per-sample `DataLoader` and the probe's pipelined step.
+It found that the loader took 3–4 ms per 1024-sample batch (more than the model step, hiding any
+device difference) and that per-epoch totals were too noisy to re-split on. Both were fixed (see
+[modules/devices.md](modules/devices.md)).
+
 ## Level 2b — minikube mesh (Phase 1)
 
 ```bash
@@ -220,6 +263,12 @@ Measured 2026-11-16 (`benchmark-results/e2e/minikube-20261116-233034/`):
 | Mesh vs 1 machine × 2 ranks | identical final loss 0.101872 and validation accuracy **91.67%**; 51,308 vs 53,465 samples/s |
 | Agent pod force-deleted mid-job | job FAILED, deleted node LOST |
 
+Re-run after Phase 2 (2026-11-17, agents now benchmark their CPU at start): same checks pass;
+mesh and one machine both reach loss 0.101840 and accuracy 91.55% (float summation order changed
+with the new sampler, so the value differs slightly from the Phase 1 run; the two topologies
+still agree exactly). The memory preflight had been comparing a value with a trailing `\r` from
+`minikube ssh`, so it errored and never refused a run; it now strips it and refuses correctly.
+
 The forced delete still delivered SIGTERM, so the dying agent reported "agent stopped" itself;
 the silent-death path (no report, LOST via missing heartbeats) is covered by level 1b's `kill -9`.
 
@@ -237,4 +286,7 @@ marks it LOST. Not run yet: no second physical machine was available.
 - Resume across machines (checkpoints are written only on node 0's local disk).
 - Multipass VMs: Multipass is not installed on the development Mac (its installer needs `sudo`).
   The manual script works inside Multipass VMs as it does on physical machines.
-- GPU backends and WAN conditions (`tc netem` latency/bandwidth emulation is planned).
+- CUDA, NCCL and ROCm: written and unit-tested, never run (no NVIDIA/AMD GPU available).
+- Balancing between genuinely different machines (e.g. a GPU PC and a CPU box): level 1c runs
+  both agents on one Mac.
+- WAN conditions (`tc netem` latency/bandwidth emulation is planned).

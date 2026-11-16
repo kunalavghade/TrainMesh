@@ -73,7 +73,9 @@ def _rank_env(rank: int, master_port: int) -> dict[str, str]:
     return env
 
 
-def _run_two_ranks(config: Path, logs: Path, *runtime_args: str) -> TwoRankRun:
+def _run_two_ranks(
+    config: Path, logs: Path, *runtime_args: str, rank_env: dict[int, dict[str, str]] | None = None
+) -> TwoRankRun:
     """Start both ranks directly with the env torchrun would set.
 
     torchrun's agent reverse-resolves the host name at startup, which takes 35 s per lookup on
@@ -89,9 +91,8 @@ def _run_two_ranks(config: Path, logs: Path, *runtime_args: str) -> TwoRankRun:
             (logs / f"rank{rank}.out").open("wb") as out,
             (logs / f"rank{rank}.err").open("wb") as err,
         ):
-            processes.append(
-                subprocess.Popen(command, env=_rank_env(rank, port), stdout=out, stderr=err)
-            )
+            env = _rank_env(rank, port) | (rank_env or {}).get(rank, {})
+            processes.append(subprocess.Popen(command, env=env, stdout=out, stderr=err))
     try:
         returncodes = [p.wait(timeout=RANK_TIMEOUT_SECONDS) for p in processes]
     except subprocess.TimeoutExpired:
@@ -118,11 +119,11 @@ def test_loads_supported_cpu_config(tmp_path: Path) -> None:
     assert load_config(config).execution.backend.communication == "gloo"
 
 
-def test_rejects_cuda_configuration(tmp_path: Path) -> None:
-    config = _write_config(tmp_path / "config.yaml", CONFIG.replace("device: cpu", "device: cuda"))
-    with pytest.raises(
-        ValueError, match="execution.backend.device: this release supports device=cpu"
-    ):
+def test_rejects_nccl_without_cuda(tmp_path: Path) -> None:
+    config = _write_config(
+        tmp_path / "config.yaml", CONFIG.replace("communication: gloo", "communication: nccl")
+    )
+    with pytest.raises(ValueError, match="communication=nccl needs device=cuda"):
         load_config(config)
 
 
@@ -180,3 +181,118 @@ training:
     resumed_metadata = _read_metadata(checkpoint_dir)
     assert resumed_metadata["epoch"] == 2
     assert resumed_metadata["global_step"] == 8
+
+
+def _teacher_config(tmp_path: Path, name: str, *, device: str, extra_batch: str = "") -> Path:
+    return _write_config(
+        tmp_path / f"{name}.yaml",
+        f"""version: 1
+run: {{seed: 42}}
+execution:
+  strategy: data_parallel
+  workers: 1
+  processes_per_worker: 2
+  backend: {{device: {device}, communication: gloo}}
+training:
+  model: {{input_size: 16, hidden_size: 32, output_size: 4}}
+  dataset: {{type: teacher, samples: 512, input_size: 16, output_size: 4}}
+  batch: {{per_rank: 16{extra_batch}}}
+  epochs: 2
+  checkpoint: {{enabled: false}}
+  validation: {{samples: 256}}
+""",
+    )
+
+
+def _result(run: TwoRankRun) -> dict:
+    assert run.succeeded, f"{run.returncodes}\n{run.rank0_stdout}\n{run.stderr}"
+    start = run.rank0_stdout.index("{\n")
+    return json.loads(run.rank0_stdout[start:])
+
+
+def test_uneven_rank_batches_train_the_same_model_as_uniform(tmp_path: Path) -> None:
+    uniform = _result(
+        _run_two_ranks(_teacher_config(tmp_path, "uniform", device="cpu"), tmp_path / "u")
+    )
+    uneven = _result(
+        _run_two_ranks(
+            _teacher_config(
+                tmp_path, "uneven", device="cpu", extra_batch=", rank_batch_sizes: [24, 8]"
+            ),
+            tmp_path / "v",
+        )
+    )
+
+    assert uniform["gradient_sync"] == "ddp" and uneven["gradient_sync"] == "allreduce"
+    assert [r["batch_size"] for r in uneven["ranks"]] == [24, 8]
+    assert abs(uniform["final_loss"] - uneven["final_loss"]) < 1e-5
+    assert uniform["validation"]["final_accuracy"] == uneven["validation"]["final_accuracy"]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs Apple MPS")
+def test_cpu_and_mps_ranks_train_one_model(tmp_path: Path) -> None:
+    cpu_only = _result(
+        _run_two_ranks(_teacher_config(tmp_path, "cpu", device="cpu"), tmp_path / "c")
+    )
+    mixed = _result(
+        _run_two_ranks(
+            _teacher_config(tmp_path, "mixed", device="auto"),
+            tmp_path / "m",
+            rank_env={0: {"TRAINMESH_DEVICE": "cpu"}, 1: {"TRAINMESH_DEVICE": "mps"}},
+        )
+    )
+
+    assert [r["device"] for r in mixed["ranks"]] == ["cpu", "mps"]
+    assert mixed["mixed_devices"] and mixed["gradient_sync"] == "allreduce"
+    assert mixed["parameters_consistent"]
+    assert mixed["max_parameter_drift"] < 1e-4
+    assert abs(cpu_only["final_loss"] - mixed["final_loss"]) < 1e-3
+    assert (
+        abs(cpu_only["validation"]["final_accuracy"] - mixed["validation"]["final_accuracy"])
+        <= 0.01
+    )
+
+
+def _balance_config(tmp_path: Path, name: str, batch: str) -> Path:
+    # Large enough that step time grows with the batch: on a tiny model fixed per-step cost
+    # dominates and a measured split has nothing to correct.
+    return _write_config(
+        tmp_path / f"{name}.yaml",
+        f"""version: 1
+run: {{seed: 42}}
+execution:
+  strategy: data_parallel
+  workers: 1
+  processes_per_worker: 2
+  backend: {{device: cpu, communication: gloo}}
+training:
+  model: {{input_size: 64, hidden_size: 1024, output_size: 4}}
+  dataset: {{type: teacher, samples: 4096, input_size: 64, output_size: 4}}
+  batch: {{per_rank: 256{batch}}}
+  epochs: 2
+  checkpoint: {{enabled: false}}
+  validation: {{samples: 512}}
+""",
+    )
+
+
+def test_throughput_balance_resplits_without_changing_the_model(tmp_path: Path) -> None:
+    uniform = _result(_run_two_ranks(_balance_config(tmp_path, "uniform", ""), tmp_path / "u"))
+    balanced = _result(
+        _run_two_ranks(
+            _balance_config(
+                tmp_path, "balanced", ", balance: throughput, rank_batch_sizes: [448, 64]"
+            ),
+            tmp_path / "b",
+        )
+    )
+
+    history = balanced["balance_history"]
+    assert balanced["balance"] == "throughput" and balanced["gradient_sync"] == "allreduce"
+    assert len(history) == balanced["epochs"]
+    assert history[0]["rank_batch_sizes"] == [448, 64]
+    # Two equal CPU ranks: after one measured epoch the 448/64 guess moves toward an even split.
+    assert history[1]["rank_batch_sizes"][0] < 448
+    assert all(sum(epoch["rank_batch_sizes"]) == 512 for epoch in history)
+    assert abs(uniform["final_loss"] - balanced["final_loss"]) < 1e-5
+    assert uniform["validation"]["final_accuracy"] == balanced["validation"]["final_accuracy"]

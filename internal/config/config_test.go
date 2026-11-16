@@ -49,7 +49,11 @@ func TestParseRejects(t *testing.T) {
 		replace [2]string
 		want    string
 	}{
-		{"gpu backend", [2]string{"device: cpu", "device: cuda"}, "execution.backend.device: this release supports device=cpu only"},
+		{"unknown device", [2]string{"device: cpu", "device: tpu"}, "execution.backend.device must be cpu, mps, cuda or auto"},
+		{"nccl without cuda", [2]string{"communication: gloo", "communication: nccl"}, "communication=nccl needs device=cuda"},
+		{"unknown precision", [2]string{"precision: fp32", "precision: fp8"}, "training.precision must be fp32, bf16, fp16 or auto"},
+		{"unknown balance", [2]string{"per_rank: 16", "per_rank: 16, balance: random"}, "training.batch.balance must be uniform or throughput"},
+		{"zero rank batch", [2]string{"per_rank: 16", "per_rank: 16, rank_batch_sizes: [8, 0]"}, "training.batch.rank_batch_sizes"},
 		{"zero batch", [2]string{"per_rank: 16", "per_rank: 0"}, "training.batch.per_rank"},
 		{"negative threads", [2]string{"processes_per_worker: 1", "processes_per_worker: 1\n  cpu_threads_per_rank: -1"}, "execution.cpu_threads_per_rank"},
 		{"unknown dataset", [2]string{"type: synthetic", "type: imagenet"}, "training.dataset.type must be synthetic or teacher"},
@@ -66,9 +70,9 @@ func TestParseRejects(t *testing.T) {
 }
 
 func TestParseReportsEveryProblem(t *testing.T) {
-	broken := strings.NewReplacer("version: 1", "version: 2", "precision: fp32", "precision: fp16").Replace(validYAML)
+	broken := strings.NewReplacer("version: 1", "version: 2", "precision: fp32", "precision: fp8").Replace(validYAML)
 	_, err := Parse([]byte(broken))
-	if err == nil || !strings.Contains(err.Error(), "version must be 1") || !strings.Contains(err.Error(), "only fp32") {
+	if err == nil || !strings.Contains(err.Error(), "version must be 1") || !strings.Contains(err.Error(), "training.precision must be") {
 		t.Fatalf("Parse() = %v, want both version and precision problems", err)
 	}
 }
@@ -94,6 +98,14 @@ func TestLoadMigratesLegacyOptimizerKey(t *testing.T) {
 	planner := c.Spec.GetPlanner().AsMap()
 	if _, hasResults := planner["results"]; hasResults || planner["enabled"] != false {
 		t.Errorf("planner = %v, want {enabled:false} without results", planner)
+	}
+}
+
+func TestAcceleratorConfigsAreValid(t *testing.T) {
+	for _, backend := range []string{"device: cuda, communication: nccl", "device: mps, communication: gloo", "device: auto, communication: auto"} {
+		if _, err := Parse([]byte(strings.Replace(validYAML, "device: cpu, communication: gloo", backend, 1))); err != nil {
+			t.Errorf("%s rejected: %v", backend, err)
+		}
 	}
 }
 

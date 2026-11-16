@@ -149,7 +149,8 @@ pod_memory_mi() { echo $((MEMORY_BASE_MI + MEMORY_PER_RANK_MI * $1)); }
 # All nodes run on one Docker VM, so its free memory is the real limit (see docs/E2E_TESTING.md).
 check_memory_headroom() {
   local machines=$1 ranks=$2 available required
-  available=$(minikube -p "$PROFILE" ssh -- free -m | awk '/Mem:/ {print $7}')
+  # minikube ssh output ends lines with \r; left in, the comparison below errors and never fails.
+  available=$(minikube -p "$PROFILE" ssh -- free -m | tr -d '\r' | awk '/Mem:/ {print $7}')
   required=$((machines * $(pod_memory_mi "$ranks") + MEMORY_HEADROOM_MI))
   if [[ -z "$available" || "$available" -lt "$required" ]]; then
     fail "Docker VM has ${available:-?} MiB available, scenario needs ${required} MiB; free memory (stop other containers or raise Docker's memory limit) and retry"

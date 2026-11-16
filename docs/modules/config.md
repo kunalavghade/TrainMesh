@@ -21,14 +21,17 @@ JobSpec
 ├── cluster.name
 ├── run                name, seed (optional, default 42), resume, results_path
 ├── execution          strategy=data_parallel, workers ≥ 1, processes_per_worker ≥ 1,
-│                      cpu_threads_per_rank ≥ 0, backend{device=cpu, communication=gloo},
+│                      cpu_threads_per_rank ≥ 0,
+│                      backend{device ∈ {cpu, mps, cuda, auto}, communication ∈ {gloo, nccl, auto}}
+│                        (nccl needs device=cuda), gradient_sync ∈ {"", auto, ddp, allreduce},
 │                      rendezvous{backend, endpoint} (informational)
 ├── training
 │   ├── model          type ∈ {"", mlp}, input/hidden/output sizes ≥ 0 (0 = default)
 │   ├── dataset        type ∈ {synthetic, teacher}, samples > 0, input/output sizes
 │   ├── optimizer      name ∈ {"", adam, sgd}, learning_rate ≥ 0 (0 = 0.001)
-│   ├── batch          per_rank > 0, gradient_accumulation_steps ≥ 0 (0 = 1)
-│   ├── epochs > 0, precision ∈ {"", fp32}
+│   ├── batch          per_rank > 0, gradient_accumulation_steps ≥ 0 (0 = 1),
+│   │                  balance ∈ {"", uniform, throughput}, rank_batch_sizes (each > 0)
+│   ├── epochs > 0, precision ∈ {"", fp32, bf16, fp16, auto}
 │   ├── checkpoint     enabled (optional, default true), directory (default ./checkpoints)
 │   └── validation     samples ≥ 0 (0 = no validation)
 └── planner            free-form (google.protobuf.Struct), reserved for the Phase 6 planner
@@ -37,12 +40,19 @@ JobSpec
 Rules with a custom message use CEL, for example:
 
 ```protobuf
-string device = 1 [(buf.validate.field).cel = {
-  id: "execution.backend.device"
-  message: "this release supports device=cpu only; CUDA/NCCL is not available"
-  expression: "this == 'cpu'"
-}];
+message Backend {
+  option (buf.validate.message).cel = {
+    id: "execution.backend.nccl_needs_cuda"
+    message: "communication=nccl needs device=cuda (NCCL cannot move CPU or MPS tensors); use gloo or auto"
+    expression: "this.communication != 'nccl' || this.device == 'cuda'"
+  };
+  ...
+}
 ```
+
+What the device, precision, sync and balance fields do is explained in
+[devices.md](devices.md). On a mesh the coordinator rewrites `communication: auto` and, for
+`balance: throughput`, fills `rank_batch_sizes` before the config reaches the ranks.
 
 Zero values mean "use the default" unless a field is `optional`; defaults are applied in one
 place per language (`training_settings()` in Python, accessor methods in Go).

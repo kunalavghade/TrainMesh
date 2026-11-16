@@ -830,6 +830,21 @@ address instead), certificate renewal, token revocation / node drain and removal
 "restart resumes from checkpoint" (moved to P5 with the other recovery work). See
 [modules/mesh.md](modules/mesh.md) and [E2E_TESTING.md](E2E_TESTING.md) levels 1b and 2b.
 
+**Phase 2 status (2026-11-17): implemented for CPU and Apple MPS and verified on one Mac;
+CUDA/NCCL/ROCm written but not run on hardware.** Built: device abstraction (`cpu`, `mps`,
+`cuda`, `auto`) with precision (`fp32`, `bf16`, `fp16` + scaler, `auto`); a group-wide gradient
+sync choice (DDP, or one flattened all-reduce staged through host memory for MPS / mixed devices
+/ unequal batches); per-device reference throughput measured by each agent (`tm-agent --device`);
+islands (`gloo-host`, `nccl-cuda`) and profiles in `trainmesh nodes`; a coordinator planner that
+filters nodes by device, resolves the collective backend for the whole group and splits each
+global batch by throughput (largest remainder); and per-epoch re-splitting in the runtime from
+median step times. Every split trains on the same global batches, so the model does not depend
+on it. Acceptance: mixed cpu+mps ranks finished steps within 1–8% of each other after one epoch
+(target 10%); profiles and islands are visible in `trainmesh nodes`; the MPS path runs (ROCm
+smoke job not run: no hardware). Not built in P2: `torch.compile`, FLOPs/memory profiling, the
+link (bandwidth/latency) matrix, and multi-island jobs (P3). See
+[modules/devices.md](modules/devices.md) and [E2E_TESTING.md](E2E_TESTING.md) level 1c.
+
 | Phase | Scope | Acceptance criteria |
 |-------|-------|---------------------|
 | **P0 — Cleanup & correctness** | §9 fix list, git + CI, proto schema v1, config v2 parser with v1 compatibility | `no_sync` test proves 1 all-reduce per optimizer step; no throughput regression vs the current baseline (numbers recorded); no pickle loads; Go/Python lint + tests green in CI. |
