@@ -1,7 +1,12 @@
-.PHONY: build test test-go test-python lint fmt demo e2e-local e2e-minikube e2e-minikube-down
+.PHONY: build generate test test-go test-python lint fmt demo e2e-local e2e-minikube e2e-minikube-down
 
 build:
 	go build -o bin/trainmesh ./cmd/trainmesh
+
+# Regenerate Go and Python code from proto/ (needs buf, protoc, protoc-gen-go; see docs/CPU_BACKEND.md).
+generate:
+	buf lint
+	PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 
 test: test-go test-python
 

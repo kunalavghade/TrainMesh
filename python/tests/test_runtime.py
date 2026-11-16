@@ -16,6 +16,8 @@ from trainmesh_runtime.runtime import load_config  # noqa: E402
 CONFIG = """version: 1
 execution:
   strategy: data_parallel
+  workers: 1
+  processes_per_worker: 2
   backend: {device: cpu, communication: gloo}
 training:
   dataset: {type: synthetic, samples: 64}
@@ -113,21 +115,22 @@ def _read_logs(logs: Path, suffix: str = "*") -> str:
 
 def test_loads_supported_cpu_config(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "config.yaml", CONFIG)
-    assert load_config(config)["execution"]["backend"]["communication"] == "gloo"
+    assert load_config(config).execution.backend.communication == "gloo"
 
 
 def test_rejects_cuda_configuration(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "config.yaml", CONFIG.replace("device: cpu", "device: cuda"))
-    with pytest.raises(ValueError, match="CPU with Gloo"):
+    with pytest.raises(
+        ValueError, match="execution.backend.device: this release supports device=cpu"
+    ):
         load_config(config)
 
 
 def test_legacy_optimizer_key_is_migrated(tmp_path: Path) -> None:
     legacy = CONFIG + "optimizer: {enabled: false, results: out.json}\n"
     loaded = load_config(_write_config(tmp_path / "config.yaml", legacy))
-    assert "optimizer" not in loaded
-    assert loaded["planner"] == {"enabled": False}
-    assert loaded["run"]["results_path"] == "out.json"
+    assert dict(loaded.planner) == {"enabled": False}
+    assert loaded.run.results_path == "out.json"
 
 
 def test_two_rank_gloo_training_and_checkpoint(tmp_path: Path) -> None:
@@ -140,6 +143,8 @@ def test_two_rank_gloo_training_and_checkpoint(tmp_path: Path) -> None:
 run: {{seed: 42}}
 execution:
   strategy: data_parallel
+  workers: 1
+  processes_per_worker: 2
   backend: {{device: cpu, communication: gloo}}
 training:
   model: {{input_size: 8, hidden_size: 16, output_size: 3}}

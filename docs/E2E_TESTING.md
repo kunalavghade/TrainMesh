@@ -27,8 +27,20 @@ final loss** (up to floating-point summation order). [`compare.py`](../scripts/e
 fails if final losses differ by more than `1e-3` or if any run reports diverged replicas.
 That turns the benchmark into a correctness test as well.
 
-Default workload: MLP 256 → 1024 → 10, 65 536 synthetic samples, 2 epochs, Adam, fp32,
-1 rank per CPU, `OMP_NUM_THREADS=1`.
+Default workload: the learnable `teacher` task, MLP 256 → 1024 → 10, 65,536 training samples,
+4,096 held-out validation samples, 3 epochs, Adam, fp32, 1 rank per CPU, `OMP_NUM_THREADS=1`.
+
+### Proof that the mesh trains a real model
+
+Throughput alone does not show that distributed training *works*. Every e2e level therefore
+trains the `teacher` task (labels from a hidden linear "teacher" network, see
+[modules/runtime.md](modules/runtime.md)) and checks validation accuracy on held-out data:
+
+- **It learned:** final validation accuracy must be ≥ 85% (`compare.py --min-accuracy`, chance is
+  10% for 10 classes; measured ≈ 92%).
+- **Every topology learned the same model:** validation accuracy may differ by at most 0.5
+  points (`--accuracy-tolerance`) and final loss by `1e-3` from the 1-machine baseline, and every
+  run must report identical parameters on all ranks.
 
 `compare.py` reports, relative to the first (baseline) scenario:
 
@@ -43,8 +55,9 @@ make e2e-local          # KEEP_WORK=1 scripts/e2e/local.sh keeps the work direct
 ```
 
 Checks, in order: CLI builds; `doctor` reports Gloo; `plan` resolves world size and global batch;
-`run` trains 2 epochs with consistent replicas and writes a v2 safetensors checkpoint (no `.pt`);
-`run --resume` continues to epoch 3 with the right global step; `benchmark` writes throughput;
+`run` trains 2 epochs on the `teacher` task with consistent replicas and writes a v2 safetensors
+checkpoint (no `.pt`); `run --resume` continues to epoch 3 with the right global step and
+**validation accuracy ≥ 85%** (measured 93.2%; chance 25%); `benchmark` writes throughput;
 a v1 pickle checkpoint is rejected with `CHECKPOINT_INVALID`; `workers: 2` is rejected.
 
 ## Level 2 — minikube multi-node test
@@ -75,26 +88,48 @@ Results land in `benchmark-results/e2e/minikube-<timestamp>/` (git-ignored): per
 pod logs, result JSON (with a `topology` block) and `summary.md`.
 
 Tunables (environment variables): `PROFILE`, `NODE_CPUS` (5), `NODE_MEMORY` (3g), `POD_CPUS` (2),
-`MEMORY_PER_RANK_MI` (512), `TORCH_VERSION` (2.15.0), `JOB_TIMEOUT_SECONDS` (900).
+`MEMORY_BASE_MI` (340), `MEMORY_PER_RANK_MI` (280), `MEMORY_HEADROOM_MI` (256),
+`TORCH_VERSION` (2.15.0), `JOB_TIMEOUT_SECONDS` (900). Before each scenario the script checks the
+Docker VM's free memory (all nodes share it) and stops with a clear message if it is too low.
 
 **Limit:** both nodes are containers on one Docker host. The pod network is virtual and fast, and
 the nodes share one CPU package and memory bus. This level proves multi-node *correctness* and
 shows communication overhead; it does **not** predict the speed of real separate machines.
 
-### Measured on the development Mac
+### Measured on the development Mac (2026-11-16)
 
-First run (2026-11-16, `benchmark-results/e2e/minikube-20261116-214339/`, not committed):
+Run `benchmark-results/e2e/minikube-20261116-222818/` (git-ignored). Workload: `teacher` task,
+MLP 256 → 1024 → 10, 65,536 samples, global batch 256, 3 epochs, 4,096 validation samples.
 
-- `single` (1 node, 2 CPUs, 2 ranks): **passed**, 29,385 samples/s, 4.46 s, final loss 2.274241,
-  replicas consistent. A native macOS run of the same config gives 2.274259; the 1.8e-5 gap comes
-  from Linux vs macOS math libraries and is within the 1e-3 tolerance.
-- `single-2x` (1 node, 4 CPUs, 4 ranks): **OOMKilled** on node `trainmesh-m02`, so `multi` did
-  not run. Peak memory of the same job measured with `docker run` and no limit: **888 MiB for 2
-  ranks, 1,440 MiB for 4 ranks**, below the pod's 3 GiB limit. The likely cause is the 3 GB
-  minikube node itself running short, not the pod limit.
+| Scenario | Nodes used | Ranks | CPUs | Samples/s | Final loss | Val accuracy per epoch |
+|----------|-----------|-------|------|-----------|------------|------------------------|
+| `single` | m02 | 2 | 2 | 51,535 | 0.101872 | 89.87% → 90.92% → **91.67%** |
+| `single-2x` | m02 | 4 | 4 | 51,258 | 0.101847 | 89.89% → 90.97% → **91.70%** |
+| `multi` | m02 + control plane | 4 | 4 | 45,620 | 0.101847 | 89.89% → 90.97% → **91.70%** |
 
-Open: size `NODE_MEMORY` / `MEMORY_PER_RANK_MI` from those measurements (for example 4 ranks ≈
-1.5 GiB request) and re-run before trusting any multi-node numbers from this level.
+What this proves and what it does not:
+
+- **The mesh trains correctly across machines.** The 2-node run learned the task (chance is 10%)
+  and matched the 1-node run: identical accuracy history and identical final loss to the
+  4-rank single-node run. The 2-rank run differs only in the 5th significant digit (float
+  summation order over 2 vs 4 ranks), far inside the tolerances.
+- **More hardware did not make this small model faster.** Doubling ranks on one node gave no
+  speedup, and the same 4 ranks split over two nodes were **11% slower** than on one node
+  (per-machine efficiency 44%). Per step, each rank computes a small batch but still exchanges
+  every gradient (~1 MB), so communication dominates. This is the motivation for P3's
+  low-communication training (DiLoCo) and for larger per-step work. It is also why the comparison
+  must be repeated on real machines and real models before drawing speed conclusions.
+
+History: the first run (2026-11-16, 21:43) had `single-2x` OOM-killed. The kernel log showed a
+`global_oom` of the whole Docker VM (7.8 GB shared with unrelated containers), not a pod or node
+limit. The script now sizes pods from measured memory (≈ 340 MiB + 280 MiB per rank) and refuses
+to start a scenario without enough free VM memory.
+
+### Also proven without Kubernetes
+
+Two node processes on one Mac with `manual-node.sh` (`--machines 2`, 2 ranks each) against one
+node with 4 ranks: identical loss and validation accuracy every epoch
+(89.89% → 90.97% → 91.70%, final loss 0.101882).
 
 ## Level 3 — physical machines (manual)
 
@@ -138,6 +173,14 @@ faster gives a fairer picture.
 | `Connection refused` / timeout to master | Firewall or wrong `--master-addr` | Allow the port on node 0; use node 0's LAN IP on every machine |
 | Gloo picks the wrong network | Several interfaces (VPN, Docker) | Pass the LAN interface with `--iface` |
 | `compare.py` reports different final losses | Different `--ranks-per-machine`/commit/torch version, or a real bug | Make inputs identical; if it persists, report it with both JSON files |
+
+## Phase 1 acceptance (future, through the CLI)
+
+Once the agent exists, the same proof must pass through `trainmesh` instead of hand-started
+torchrun: two machines join a cluster with single-use tokens and report READY; one job runs one
+rank per machine; logs show ranks 0 and 1 and world size 2; final model hashes match; validation
+accuracy matches the single-machine baseline; killing one rank stops the whole group and a
+restart resumes from a verified checkpoint.
 
 ## Not covered yet
 

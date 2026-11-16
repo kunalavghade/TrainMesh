@@ -1,4 +1,8 @@
-"""Load and validate the v1 job configuration supported by the CPU/Gloo runtime."""
+"""Load a job config into the generated JobSpec and check the rules in jobspec.proto.
+
+The schema and its validation rules live in proto/trainmesh/v1/jobspec.proto; the Go CLI applies
+the same rules, so this module only migrates legacy keys, parses, validates and applies defaults.
+"""
 
 from __future__ import annotations
 
@@ -7,25 +11,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import protovalidate
 import yaml
+from google.protobuf import json_format
+
+from trainmesh.v1.jobspec_pb2 import JobSpec
 
 from .errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_VERSION = 1
-SUPPORTED_OPTIMIZERS = frozenset({"adam", "sgd"})
+DEFAULT_SEED = 42
+DEFAULT_INPUT_SIZE = 32
+DEFAULT_HIDDEN_SIZE = 64
+DEFAULT_OUTPUT_SIZE = 4
+DEFAULT_OPTIMIZER = "adam"
+DEFAULT_LEARNING_RATE = 0.001
+DEFAULT_CHECKPOINT_DIRECTORY = "./checkpoints"
 
 
 @dataclass(frozen=True, slots=True)
 class TrainingSettings:
-    """Typed view of the `training` and `run` blocks used by the trainer."""
+    """JobSpec with every default applied: the trainer reads only this."""
 
     seed: int
     epochs: int
     per_rank_batch: int
     accumulation_steps: int
+    dataset_type: str
     samples: int
+    validation_samples: int
     input_size: int
     hidden_size: int
     output_size: int
@@ -34,76 +49,79 @@ class TrainingSettings:
     checkpoint_enabled: bool
     checkpoint_directory: Path
     results_path: str
+    resume: str
 
 
-def load_config(path: str | Path) -> dict[str, Any]:
+def load_config(path: str | Path) -> JobSpec:
     with Path(path).open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if not isinstance(config, dict) or config.get("version") != SUPPORTED_VERSION:
-        raise ConfigError(f"configuration must be a YAML mapping with version: {SUPPORTED_VERSION}")
-    _migrate_legacy_keys(config)
-    _validate(config)
-    return config
+        document = yaml.safe_load(stream)
+    return parse_config(document)
 
 
-def training_settings(config: dict[str, Any]) -> TrainingSettings:
-    run = config.get("run", {})
-    training = config["training"]
-    model = training.get("model", {})
-    dataset = training["dataset"]
-    optimizer = training.get("optimizer", {})
-    batch = training["batch"]
-    checkpoint = training.get("checkpoint", {})
+def parse_config(document: Any) -> JobSpec:
+    if not isinstance(document, dict):
+        raise ConfigError("configuration must be a YAML mapping")
+    _migrate_legacy_keys(document)
+    spec = JobSpec()
+    try:
+        json_format.ParseDict(document, spec)
+    except json_format.ParseError as exc:
+        raise ConfigError(f"invalid job config: {exc}") from exc
+    validate(spec)
+    return spec
+
+
+def validate(spec: JobSpec) -> None:
+    try:
+        protovalidate.validate(spec)
+    except protovalidate.ValidationError as exc:
+        problems = [
+            f"{_field_path(violation.proto.field)}: {violation.proto.message}"
+            for violation in exc.violations
+        ]
+        raise ConfigError("invalid job config:\n  " + "\n  ".join(problems)) from exc
+
+
+def to_dict(spec: JobSpec) -> dict[str, Any]:
+    """Plain-dict form stored in checkpoints and compared on resume."""
+    return json_format.MessageToDict(spec, preserving_proto_field_name=True)
+
+
+def training_settings(spec: JobSpec) -> TrainingSettings:
+    training = spec.training
+    model, dataset = training.model, training.dataset
+    checkpoint = training.checkpoint
     return TrainingSettings(
-        seed=int(run.get("seed", 42)),
-        epochs=int(training["epochs"]),
-        per_rank_batch=int(batch["per_rank"]),
-        accumulation_steps=int(batch.get("gradient_accumulation_steps", 1)),
-        samples=int(dataset.get("samples", 4096)),
-        input_size=int(model.get("input_size", dataset.get("input_size", 32))),
-        hidden_size=int(model.get("hidden_size", 64)),
-        output_size=int(model.get("output_size", dataset.get("output_size", 4))),
-        optimizer_name=str(optimizer.get("name", "adam")).lower(),
-        learning_rate=float(optimizer.get("learning_rate", 0.001)),
-        checkpoint_enabled=bool(checkpoint.get("enabled", True)),
-        checkpoint_directory=Path(checkpoint.get("directory", "./checkpoints")),
-        results_path=str(run.get("results_path", "")),
+        seed=spec.run.seed if spec.run.HasField("seed") else DEFAULT_SEED,
+        epochs=training.epochs,
+        per_rank_batch=training.batch.per_rank,
+        accumulation_steps=training.batch.gradient_accumulation_steps or 1,
+        dataset_type=dataset.type,
+        samples=dataset.samples,
+        validation_samples=training.validation.samples,
+        input_size=model.input_size or dataset.input_size or DEFAULT_INPUT_SIZE,
+        hidden_size=model.hidden_size or DEFAULT_HIDDEN_SIZE,
+        output_size=model.output_size or dataset.output_size or DEFAULT_OUTPUT_SIZE,
+        optimizer_name=training.optimizer.name or DEFAULT_OPTIMIZER,
+        learning_rate=training.optimizer.learning_rate or DEFAULT_LEARNING_RATE,
+        checkpoint_enabled=checkpoint.enabled if checkpoint.HasField("enabled") else True,
+        checkpoint_directory=Path(checkpoint.directory or DEFAULT_CHECKPOINT_DIRECTORY),
+        results_path=spec.run.results_path,
+        resume=spec.run.resume,
     )
 
 
-def _migrate_legacy_keys(config: dict[str, Any]) -> None:
-    legacy = config.pop("optimizer", None)
+def _migrate_legacy_keys(document: dict[str, Any]) -> None:
+    legacy = document.pop("optimizer", None)
     if not isinstance(legacy, dict):
         return
     logger.warning(
         "config key 'optimizer' is deprecated: use 'planner', and 'run.results_path' for results"
     )
-    config.setdefault("planner", {k: v for k, v in legacy.items() if k != "results"})
+    document.setdefault("planner", {k: v for k, v in legacy.items() if k != "results"})
     if legacy.get("results"):
-        config.setdefault("run", {}).setdefault("results_path", legacy["results"])
+        document.setdefault("run", {}).setdefault("results_path", legacy["results"])
 
 
-def _validate(config: dict[str, Any]) -> None:
-    execution = config.get("execution", {})
-    if execution.get("strategy") != "data_parallel":
-        raise ConfigError("only execution.strategy=data_parallel is implemented")
-    backend = execution.get("backend", {})
-    if backend.get("device", "cpu") != "cpu" or backend.get("communication", "gloo") != "gloo":
-        raise ConfigError("this release supports CPU with Gloo only; CUDA/NCCL is not available")
-    training = config.get("training", {})
-    if training.get("precision", "fp32") != "fp32":
-        raise ConfigError("only fp32 precision is currently supported")
-    if training.get("dataset", {}).get("type") != "synthetic":
-        raise ConfigError("only deterministic synthetic datasets are supported")
-    batch = training.get("batch", {})
-    if int(batch.get("per_rank", 0)) <= 0 or int(batch.get("gradient_accumulation_steps", 1)) <= 0:
-        raise ConfigError(
-            "training.batch.per_rank and gradient_accumulation_steps must be positive"
-        )
-    if int(training.get("epochs", 0)) <= 0:
-        raise ConfigError("training.epochs must be positive")
-    optimizer_name = str(training.get("optimizer", {}).get("name", "adam")).lower()
-    if optimizer_name not in SUPPORTED_OPTIMIZERS:
-        raise ConfigError(
-            f"unsupported optimizer {optimizer_name!r}: use one of {sorted(SUPPORTED_OPTIMIZERS)}"
-        )
+def _field_path(field_path: Any) -> str:
+    return ".".join(element.field_name for element in field_path.elements) or "<message>"

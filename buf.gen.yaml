@@ -1,0 +1,14 @@
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-go
+    out: internal/gen
+    opt: paths=source_relative
+  # Python code lands at python/ top level: protovalidate imports `buf.validate` absolutely.
+  - protoc_builtin: python
+    out: python
+    include_imports: true
+  - protoc_builtin: pyi
+    out: python
+    include_imports: true

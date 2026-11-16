@@ -23,8 +23,8 @@ training:
     hidden_size: 64
     output_size: 4
   dataset:
-    type: synthetic
-    samples: 4096
+    type: teacher # learnable labels; use synthetic for pure throughput tests
+    samples: 8192
     input_size: 32
     output_size: 4
   optimizer:
@@ -38,5 +38,7 @@ training:
   checkpoint:
     enabled: true
     directory: ./checkpoints
+  validation:
+    samples: 1024 # held-out samples scored after every epoch
 planner:
   enabled: false

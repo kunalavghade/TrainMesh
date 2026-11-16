@@ -27,22 +27,22 @@ func planCommand() *cobra.Command {
 			return err
 		}
 		plan := map[string]any{
-			"strategy":                    c.Execution.Strategy,
-			"workers_requested":           c.Execution.Workers,
-			"processes_per_worker":        c.Execution.ProcessesPerWorker,
+			"strategy":                    c.Spec.GetExecution().GetStrategy(),
+			"workers_requested":           c.Spec.GetExecution().GetWorkers(),
+			"processes_per_worker":        c.Spec.GetExecution().GetProcessesPerWorker(),
 			"threads_per_rank":            threadsPerRank(c, h),
 			"world_size":                  c.WorldSize(),
-			"per_rank_batch":              c.Training.Batch.PerRank,
-			"gradient_accumulation_steps": c.Training.Batch.GradientAccumulationSteps,
+			"per_rank_batch":              c.Spec.GetTraining().GetBatch().GetPerRank(),
+			"gradient_accumulation_steps": c.AccumulationSteps(),
 			"effective_global_batch":      c.GlobalBatchSize(),
-			"dataset_samples":             c.Training.Dataset.Samples,
-			"estimated_epochs":            c.Training.Epochs,
+			"dataset_samples":             c.Spec.GetTraining().GetDataset().GetSamples(),
+			"estimated_epochs":            c.Spec.GetTraining().GetEpochs(),
 			"device":                      "cpu",
 			"communication":               "gloo",
 			"execution":                   "single-host torchrun (standalone rendezvous)",
 			"multi_machine_supported":     false,
 		}
-		if c.Execution.Workers > 1 {
+		if c.Spec.GetExecution().GetWorkers() > 1 {
 			plan["execution"] = "not executable: multi-machine agent orchestration is not implemented in this release"
 		}
 		return writeJSON(cmd.OutOrStdout(), plan)
@@ -86,14 +86,14 @@ func launchTraining(cmd *cobra.Command, configPath string, extraArgs []string) e
 	if err != nil {
 		return err
 	}
-	if c.Execution.Workers != 1 {
+	if c.Spec.GetExecution().GetWorkers() != 1 {
 		return ErrMultiMachineUnsupported
 	}
 	h, err := currentHost()
 	if err != nil {
 		return err
 	}
-	localRanks := c.Execution.ProcessesPerWorker
+	localRanks := int(c.Spec.GetExecution().GetProcessesPerWorker())
 	if localRanks > h.logicalCPUs {
 		return fmt.Errorf("requested %d local processes on %d logical CPUs; reduce processes_per_worker to avoid CPU oversubscription", localRanks, h.logicalCPUs)
 	}
@@ -137,5 +137,5 @@ func loadConfig(cmd *cobra.Command, path string) (config.Config, error) {
 }
 
 func threadsPerRank(c config.Config, h host) int {
-	return launcher.ResolveThreadsPerRank(c.Execution.CPUThreadsPerRank, h.getenv("OMP_NUM_THREADS"))
+	return launcher.ResolveThreadsPerRank(int(c.Spec.GetExecution().GetCpuThreadsPerRank()), h.getenv("OMP_NUM_THREADS"))
 }

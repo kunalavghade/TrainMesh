@@ -20,7 +20,11 @@ NODE_CPUS=${NODE_CPUS:-5}
 NODE_MEMORY=${NODE_MEMORY:-3g}
 POD_CPUS=${POD_CPUS:-2}
 RANKS_PER_CPU=1
-MEMORY_PER_RANK_MI=${MEMORY_PER_RANK_MI:-512}
+# Measured 2026-11-16 (torch 2.15 CPU, MLP 256-1024-10): 888 MiB for 2 ranks, 1440 MiB for 4.
+MEMORY_BASE_MI=${MEMORY_BASE_MI:-340}
+MEMORY_PER_RANK_MI=${MEMORY_PER_RANK_MI:-280}
+# Free memory the Docker VM must keep beyond the scenario's own estimate.
+MEMORY_HEADROOM_MI=${MEMORY_HEADROOM_MI:-256}
 IMAGE=${IMAGE:-trainmesh-runtime:dev}
 TORCH_VERSION=${TORCH_VERSION:-2.15.0}
 JOB_TIMEOUT_SECONDS=${JOB_TIMEOUT_SECONDS:-900}
@@ -64,7 +68,7 @@ build_image() {
   docker build -f "$ROOT/deploy/docker/runtime.Dockerfile" \
     --build-arg TORCH_VERSION="$TORCH_VERSION" -t "$IMAGE" "$ROOT"
   log "loading $IMAGE into every node"
-  minikube -p "$PROFILE" image load "$IMAGE"
+  minikube -p "$PROFILE" image load --overwrite=true "$IMAGE"
 }
 
 # job_manifest JOB MACHINES CPUS RANKS prints a headless Service and an Indexed Job.
@@ -72,8 +76,9 @@ job_manifest() {
   local job=$1 machines=$2 cpus=$3 ranks=$4
   local master_addr="127.0.0.1"
   [[ "$machines" -gt 1 ]] && master_addr="$job-0.$job"
-  local memory_request=$((ranks * MEMORY_PER_RANK_MI))
-  local memory_limit=$((memory_request * 3 / 2))
+  local memory_request
+  memory_request=$(pod_memory_mi "$ranks")
+  local memory_limit=$((memory_request * 2))
   cat <<EOF
 apiVersion: v1
 kind: Service
@@ -136,6 +141,20 @@ spec:
 EOF
 }
 
+pod_memory_mi() { echo $((MEMORY_BASE_MI + MEMORY_PER_RANK_MI * $1)); }
+
+# check_memory_headroom MACHINES RANKS fails early when the shared Docker VM cannot fit the scenario.
+# All nodes run on one Docker VM, so its free memory is the real limit (see docs/E2E_TESTING.md).
+check_memory_headroom() {
+  local machines=$1 ranks=$2 available required
+  available=$(minikube -p "$PROFILE" ssh -- free -m | awk '/Mem:/ {print $7}')
+  required=$((machines * $(pod_memory_mi "$ranks") + MEMORY_HEADROOM_MI))
+  if [[ -z "$available" || "$available" -lt "$required" ]]; then
+    fail "Docker VM has ${available:-?} MiB available, scenario needs ${required} MiB; free memory (stop other containers or raise Docker's memory limit) and retry"
+  fi
+  log "memory ok: ${available} MiB available, ${required} MiB needed"
+}
+
 wait_for_job() {
   local job=$1 machines=$2 waited=0 succeeded failed
   while ((waited < JOB_TIMEOUT_SECONDS)); do
@@ -163,6 +182,7 @@ run_scenario() {
   local ranks=$((cpus * RANKS_PER_CPU))
   local job="tm-$name-$(date +%s)"
   log "scenario $name: $machines machine(s) x $cpus CPU(s), $ranks rank(s) each"
+  check_memory_headroom "$machines" "$ranks"
 
   python3 "$ROOT/scripts/e2e/bench_config.py" --name "$name" --machines "$machines" \
     --ranks-per-machine "$ranks" --results-path /tmp/result.json >"$RESULTS/$name.yaml"

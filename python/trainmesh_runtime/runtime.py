@@ -16,10 +16,11 @@ from typing import Any
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, DistributedSampler, TensorDataset
+from torch.utils.data import DataLoader
 
 from .checkpoint import Progress, load_checkpoint, save_checkpoint
-from .config import TrainingSettings, load_config, training_settings
+from .config import TrainingSettings, load_config, to_dict, training_settings
+from .data import build_train_loader, build_validation_loader
 from .distributed import (
     DistContext,
     all_reduce_sum_,
@@ -30,6 +31,7 @@ from .distributed import (
     init_process_group,
     max_across_ranks,
 )
+from .evaluation import ValidationResult, evaluate
 
 __all__ = ["MLP", "EpochStats", "load_config", "train", "train_epoch"]
 
@@ -64,13 +66,13 @@ class EpochStats:
 def train(
     config_path: str, output_path: str | None = None, resume_path: str | None = None
 ) -> dict[str, Any]:
-    config = load_config(config_path)
-    settings = training_settings(config)
+    spec = load_config(config_path)
+    settings = training_settings(spec)
     ctx = context_from_env()
     init_process_group(ctx)
     try:
-        resume = resume_path or config.get("run", {}).get("resume")
-        result = _run_job(config, settings, ctx, resume_path=resume)
+        resume = resume_path or settings.resume
+        result = _run_job(to_dict(spec), settings, ctx, resume_path=resume)
         _write_results(result, output_path or settings.results_path, ctx)
         barrier(ctx)
         return result
@@ -119,27 +121,6 @@ def configure_threads() -> int:
     return torch.get_num_threads()
 
 
-def build_loader(
-    settings: TrainingSettings, ctx: DistContext
-) -> tuple[DataLoader, DistributedSampler | None]:
-    # Identical deterministic dataset on every rank; DistributedSampler assigns disjoint indices.
-    generator = torch.Generator().manual_seed(settings.seed + 1)
-    features = torch.randn(settings.samples, settings.input_size, generator=generator)
-    target = torch.randint(settings.output_size, (settings.samples,), generator=generator)
-    dataset = TensorDataset(features, target)
-    sampler = (
-        DistributedSampler(
-            dataset, num_replicas=ctx.world_size, rank=ctx.rank, shuffle=True, seed=settings.seed
-        )
-        if ctx.is_distributed
-        else None
-    )
-    loader = DataLoader(
-        dataset, batch_size=settings.per_rank_batch, sampler=sampler, shuffle=sampler is None
-    )
-    return loader, sampler
-
-
 def build_model(settings: TrainingSettings, ctx: DistContext) -> nn.Module:
     model = MLP(settings.input_size, settings.hidden_size, settings.output_size)
     return DistributedDataParallel(model) if ctx.is_distributed else model
@@ -173,7 +154,8 @@ def _run_job(
     random.seed(settings.seed)
     torch.manual_seed(settings.seed)
     threads = configure_threads()
-    loader, sampler = build_loader(settings, ctx)
+    loader, sampler = build_train_loader(settings, ctx)
+    validation_loader = build_validation_loader(settings, ctx)
     model = build_model(settings, ctx)
     optimizer = build_optimizer(model, settings)
     criterion = nn.CrossEntropyLoss(reduction="sum")
@@ -191,6 +173,7 @@ def _run_job(
 
     started = time.perf_counter()
     epoch_losses: list[float] = []
+    validation_history: list[ValidationResult] = []
     processed_samples = 0
     for epoch in range(start_epoch, settings.epochs):
         if sampler is not None:
@@ -206,16 +189,19 @@ def _run_job(
         processed_samples += int(sample_total)
         global_step = progress.global_step + stats.optimizer_steps
         progress = Progress(epoch=epoch + 1, global_step=global_step)
+        event: dict[str, Any] = {
+            "event": "epoch",
+            "epoch": epoch + 1,
+            "loss": epoch_loss,
+            "samples": int(sample_total),
+            "world_size": ctx.world_size,
+        }
+        if validation_loader is not None:
+            validation = evaluate(unwrap(model), validation_loader, ctx)
+            validation_history.append(validation)
+            event.update(val_loss=validation.loss, val_accuracy=validation.accuracy)
         if ctx.is_primary:
-            _emit_event(
-                {
-                    "event": "epoch",
-                    "epoch": epoch + 1,
-                    "loss": epoch_loss,
-                    "samples": int(sample_total),
-                    "world_size": ctx.world_size,
-                }
-            )
+            _emit_event(event)
         if settings.checkpoint_enabled:
             save_checkpoint(
                 settings.checkpoint_directory / LATEST_CHECKPOINT,
@@ -244,6 +230,21 @@ def _run_job(
         "samples_per_second": processed_samples / max(elapsed, 1e-9),
         "model_sha256": digest,
         "parameters_consistent": True,
+        "dataset_type": settings.dataset_type,
+        "validation": _validation_summary(validation_history),
+    }
+
+
+def _validation_summary(history: list[ValidationResult]) -> dict[str, Any] | None:
+    if not history:
+        return None
+    final = history[-1]
+    return {
+        "samples": final.samples,
+        "final_loss": final.loss,
+        "final_accuracy": final.accuracy,
+        "accuracy_history": [entry.accuracy for entry in history],
+        "loss_history": [entry.loss for entry in history],
     }
 
 
