@@ -7,6 +7,8 @@ import json
 import os
 from typing import Any
 
+from . import __version__
+
 
 def capability_report() -> dict[str, Any]:
     report: dict[str, Any] = {
@@ -16,6 +18,7 @@ def capability_report() -> dict[str, Any]:
         "torchrun": False,
         "safetensors": importlib.util.find_spec("safetensors") is not None,
         "cpu_count": os.cpu_count(),
+        "runtime_version": __version__,
     }
     if importlib.util.find_spec("torch") is None:
         return report

@@ -24,8 +24,12 @@ that contains `python/trainmesh_runtime/__init__.py`.
 ## Command and environment (`Spec.Args`, `Spec.Env`)
 
 - 1 rank: `python -m trainmesh_runtime --config <abs path> [extra args]`.
-- N ranks: `python -m torch.distributed.run --nnodes=1 --node_rank=0 --nproc_per_node=N
-  --master_addr=127.0.0.1 --master_port=<port> -m trainmesh_runtime …`.
+- N ranks on this machine: `python -m torch.distributed.run --nnodes=1 --node_rank=0
+  --nproc_per_node=N --master_addr=127.0.0.1 --master_port=<free port> -m trainmesh_runtime …`.
+- Part of a multi-machine job (`Spec.Nodes > 1`, filled by the agent from the coordinator):
+  `--nnodes=Nodes --node_rank=NodeRank --master_addr=MasterAddr --master_port=MasterPort`, the
+  runtime runs in `WorkDir` (the job directory), and `GLOO_SOCKET_IFNAME=Interface`. The port is
+  the coordinator's, so there is no port retry and no loopback pinning.
   `--standalone` is deliberately **not** used: its c10d store ignores `USE_LIBUV=0` and hangs on
   macOS.
 - Environment added on top of the caller's: `PYTHONPATH=<runtime dir>[:existing]`,

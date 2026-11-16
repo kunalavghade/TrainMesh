@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the CLI release version.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // host captures the process environment so commands stay testable.
 type host struct {
@@ -52,6 +52,7 @@ func NewRoot() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), Version)
 		}},
 		doctorCommand(), planCommand(), runCommand(), benchmarkCommand(), clusterCommand(),
+		tokenCommand(), nodesCommand(), jobCommand(),
 	)
 	return root
 }

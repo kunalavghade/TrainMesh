@@ -2,16 +2,16 @@
 
 Adaptive distributed AI training engine written in Go and Python. Distribute model-training computation across machines and optimize compute, communication and training time.
 
-TrainMesh currently runs **real single-host CPU DistributedDataParallel (DDP)** with PyTorch Gloo. It does not require a GPU. Cluster identity and local planning are implemented; remote enrollment, multi-machine process orchestration, automatic pilot selection, and fault recovery are not yet implemented. See [implementation status](docs/IMPLEMENTATION_STATUS.md) before treating this as a multi-machine release.
+TrainMesh runs **real CPU DistributedDataParallel (DDP)** with PyTorch Gloo, on one machine or across machines on a LAN. Machines join a coordinator (`meshd`) with single-use tokens over mTLS, report health through an agent (`tm-agent`), and train one job together through the `trainmesh` CLI. It does not require a GPU. GPU backends, training over the internet, large-model parallelism and automatic recovery are later phases. See [implementation status](docs/IMPLEMENTATION_STATUS.md) for what is verified, and on what.
 
 ```mermaid
 flowchart LR
-  CLI[Go CLI / planner] -->|validated config, process lifecycle| Launcher[torchrun]
-  Launcher --> R0[Python rank 0]
-  Launcher --> R1[Python rank 1]
+  CLI[trainmesh CLI] -->|submit job, mTLS| M[meshd coordinator]
+  A1[tm-agent · machine 1] -->|join, heartbeat| M
+  A2[tm-agent · machine 2] -->|join, heartbeat| M
+  A1 -->|torchrun node rank 0| R0[ranks]
+  A2 -->|torchrun node rank 1| R1[ranks]
   R0 <-->|Gloo all-reduce| R1
-  R0 --> Checkpoint[Local checkpoint]
-  R0 --> Metrics[JSON metrics]
 ```
 
 ## Quick start
@@ -21,7 +21,7 @@ Requirements: Go 1.24+, Python 3.10+, CPU PyTorch with Gloo, and `uv` (or pip).
 ```bash
 uv venv .venv
 uv pip install --python .venv/bin/python -e 'python[test]'
-go build -o bin/trainmesh ./cmd/trainmesh
+make build                  # bin/trainmesh, bin/meshd, bin/tm-agent
 ./bin/trainmesh doctor
 ./bin/trainmesh plan --config examples/cpu-ddp.yaml
 ./bin/trainmesh run --config examples/cpu-ddp.yaml
@@ -32,12 +32,13 @@ The example trains a small MLP on the learnable synthetic `teacher` task, report
 ## Commands
 
 - `trainmesh doctor` inspects Python, PyTorch, Gloo, and torchrun.
-- `trainmesh cluster init` creates a local cluster identity; `cluster status` reports the local host.
 - `trainmesh plan --config ...` validates supported settings and prints the resolved batch/world size.
-- `trainmesh run --config ...` launches local CPU training through torchrun.
+- `trainmesh run --config ...` trains on this machine through torchrun.
 - `trainmesh benchmark --config ... --output benchmark-results/run.json` records actual runtime metrics.
+- `meshd` runs the coordinator; `trainmesh token create` prints a join string; `tm-agent --join '<join string>'` joins a machine; `trainmesh nodes` lists machines.
+- `trainmesh run --config ... --coordinator host:7443` trains across `execution.workers` machines; `trainmesh job get|cancel` inspects or stops a job.
 
-Remote workers are deliberately reported as unsupported until the authenticated agent and multi-node launcher are complete. A local multi-process test is not a substitute for multi-machine validation. Multi-machine training is proven today by starting torchrun directly (minikube and physical-machine scripts in [E2E testing](docs/E2E_TESTING.md)); launching it through the CLI is Phase 1.
+How to set up several machines: [modules/mesh.md](docs/modules/mesh.md). The mesh is verified on one Mac (two agents) and on a 2-node minikube cluster, with the same validation accuracy as one machine; two physical machines are still to be tested ([E2E testing](docs/E2E_TESTING.md)).
 
 ## Docs
 

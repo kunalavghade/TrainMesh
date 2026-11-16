@@ -27,7 +27,7 @@ run:
 execution:
   strategy: data_parallel
   backend: {{device: cpu, communication: gloo}}
-  workers: 1
+  workers: {machines}
   processes_per_worker: {ranks_per_machine}
 training:
   model:
@@ -61,6 +61,7 @@ def render(args: argparse.Namespace) -> str:
         raise ValueError(f"samples {args.samples} must be a multiple of {args.global_batch}")
     return TEMPLATE.format(
         name=args.name,
+        machines=args.machines,
         ranks_per_machine=args.ranks_per_machine,
         input_size=args.input_size,
         hidden_size=args.hidden_size,

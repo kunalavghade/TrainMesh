@@ -59,3 +59,5 @@ jobs:
           uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --python .venv/bin/python -e 'python[dev]'
       - run: scripts/e2e/local.sh
+      - name: Mesh end to end (meshd + 2 tm-agents)
+        run: scripts/e2e/mesh-local.sh

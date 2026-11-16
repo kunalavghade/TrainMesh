@@ -1,18 +1,18 @@
 # End-to-end and multi-machine testing
 
-Three levels of end-to-end test, from fastest to most realistic. All of them run real PyTorch
-training; none use mocks.
+End-to-end tests, from fastest to most realistic. All of them run real PyTorch training; none
+use mocks.
 
 | Level | Command | What it proves | Runs in CI |
 |-------|---------|----------------|------------|
 | 1. Local CLI | `make e2e-local` | The `trainmesh` binary works end to end on one machine | Yes (`e2e` job, Linux) |
-| 2. minikube multi-node | `make e2e-minikube` | Training across 2 kubernetes nodes reaches the same model as 1 node; measures overhead | No (needs Docker + minikube) |
-| 3. Physical machines | `scripts/e2e/manual-node.sh` on each machine | Real 1-machine vs multi-machine speed over your network | No (manual) |
+| 1b. Local mesh | `make e2e-mesh-local` | `meshd` + 2 `tm-agent`s on one machine: join, train through `trainmesh run --coordinator`, same model as 1 machine, a killed agent fails the job and goes LOST | Yes (`e2e` job, Linux) |
+| 2. minikube multi-node | `make e2e-minikube` | Training across 2 kubernetes nodes reaches the same model as 1 node (torchrun started by Kubernetes); measures overhead | No (needs Docker + minikube) |
+| 2b. minikube mesh | `make e2e-minikube-mesh` | `meshd` + one `tm-agent` pod per kubernetes node; the Phase 1 path over a real pod network | No (needs Docker + minikube) |
+| 3. Physical machines | `scripts/e2e/manual-node.sh`, or `meshd` + `tm-agent` as in [modules/mesh.md](modules/mesh.md) | Real 1-machine vs multi-machine speed over your network | No (manual) |
 
-> The trainmesh CLI cannot launch multi-machine jobs yet (that is Phase 1 in
-> [TRAINMESH_ARCHITECTURE.md](TRAINMESH_ARCHITECTURE.md)). Levels 2 and 3 therefore call
-> `torchrun` directly with the TrainMesh runtime. They test the runtime and the network path,
-> not a TrainMesh agent.
+Levels 2 and 3 with `manual-node.sh` start `torchrun` directly, testing the runtime and the
+network path. Levels 1b and 2b go through the Phase 1 control plane (`meshd`, agents, CLI).
 
 ## How the 1-machine vs multi-machine comparison stays fair
 
@@ -174,17 +174,66 @@ faster gives a fairer picture.
 | Gloo picks the wrong network | Several interfaces (VPN, Docker) | Pass the LAN interface with `--iface` |
 | `compare.py` reports different final losses | Different `--ranks-per-machine`/commit/torch version, or a real bug | Make inputs identical; if it persists, report it with both JSON files |
 
-## Phase 1 acceptance (future, through the CLI)
+## Level 1b — local mesh (Phase 1)
 
-Once the agent exists, the same proof must pass through `trainmesh` instead of hand-started
-torchrun: two machines join a cluster with single-use tokens and report READY; one job runs one
-rank per machine; logs show ranks 0 and 1 and world size 2; final model hashes match; validation
-accuracy matches the single-machine baseline; killing one rank stops the whole group and a
-restart resumes from a verified checkpoint.
+```bash
+make e2e-mesh-local     # = scripts/e2e/mesh-local.sh; KEEP_WORK=1 keeps logs and state
+```
+
+Builds `trainmesh`, `meshd` and `tm-agent`; starts `meshd` on a free loopback port; joins two
+agents (separate state dirs = separate identities) with single-use tokens; checks that a used
+join string is refused; trains the `teacher` task across both agents with
+`trainmesh run --coordinator`; runs the same job on one machine; requires identical accuracy and
+loss (`compare.py`); then starts a long job, `kill -9`s one agent and its training processes, and
+requires the job to FAIL, that node to become LOST and the other to return to READY.
+
+Measured on the development Mac (2026-11-16):
+
+| Check | Result |
+|-------|--------|
+| Two agents join, become READY | yes |
+| Reused join string | refused ("already been used") |
+| 2 machines × 2 ranks via the CLI vs 1 machine × 4 ranks | identical final loss 0.101882 and validation accuracy **91.70%** |
+| `kill -9` an agent mid-job | job FAILED ("node lost (no heartbeats)"), node LOST, survivor READY |
+
+## Level 2b — minikube mesh (Phase 1)
+
+```bash
+make e2e-minikube-mesh  # = scripts/e2e/minikube.sh mesh (needs the cluster from `make e2e-minikube`)
+```
+
+Cross-compiles the Go binaries for the Docker VM's architecture, builds
+[`deploy/docker/mesh.Dockerfile`](../deploy/docker/mesh.Dockerfile) on top of the runtime image,
+and deploys `meshd` (Deployment + Service) and one `tm-agent` per node (StatefulSet with pod
+anti-affinity; join string from a 2-use token in a Secret). Then: a 2-machine job through
+`trainmesh run --coordinator` inside the `meshd` pod; the same job on one machine inside
+`trainmesh-agent-0`; `compare.py`; and finally a forced delete of the node-rank-1 agent pod
+mid-job. `make e2e-minikube-mesh` cleans up the mesh resources at the end
+(`scripts/e2e/minikube.sh mesh-down` does it by hand).
+
+Measured 2026-11-16 (`benchmark-results/e2e/minikube-20261116-233034/`):
+
+| Check | Result |
+|-------|--------|
+| Agents | on 2 distinct kubernetes nodes (`trainmesh-m02`, `trainmesh`), both READY |
+| Mesh job (2 machines × 1 rank) | SUCCEEDED; rendezvous at node rank 0's **pod IP** (10.244.1.8:29500), so traffic crossed nodes |
+| Mesh vs 1 machine × 2 ranks | identical final loss 0.101872 and validation accuracy **91.67%**; 51,308 vs 53,465 samples/s |
+| Agent pod force-deleted mid-job | job FAILED, deleted node LOST |
+
+The forced delete still delivered SIGTERM, so the dying agent reported "agent stopped" itself;
+the silent-death path (no report, LOST via missing heartbeats) is covered by level 1b's `kill -9`.
+
+## Phase 1 acceptance on physical machines (manual, pending)
+
+Follow "Operating it" in [modules/mesh.md](modules/mesh.md) on two real machines: both join with
+single-use tokens and report READY; one job runs one rank per machine; final model hashes match;
+validation accuracy matches the single-machine baseline; killing one machine fails the job and
+marks it LOST. Not run yet: no second physical machine was available.
 
 ## Not covered yet
 
-- Launching multi-machine jobs through the `trainmesh` CLI and agent (Phase 1).
+- Two physical machines (see above).
+- Automatic recovery after a node is lost (the job fails; re-submit with `run.resume`; Phase 5).
 - Resume across machines (checkpoints are written only on node 0's local disk).
 - Multipass VMs: Multipass is not installed on the development Mac (its installer needs `sudo`).
   The manual script works inside Multipass VMs as it does on physical machines.

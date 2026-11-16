@@ -69,16 +69,17 @@ for anything that imports torch.
 
 ### Git state at hand-off
 
-- `main` = `8bf9ef4` "ci: fix macOS two-rank test hang (#1)" (pushed). PR #1 is merged.
-- Branch `feat/p0-jobspec` (pushed, PR open): completes **Phase 0**. It contains two commits:
-  the e2e/multi-machine test tooling (`eeeb264`) and the single protobuf schema with the
-  learnable `teacher` task, validation accuracy and per-module docs.
-- Branch `feat/e2e-multinode` (local only) is the first of those two commits; delete it after the
-  P0 PR merges: `git branch -D feat/e2e-multinode`.
-- The `gh` CLI's *active* account may be `Kunal77avghade`, which has no rights on this repo. Run
-  `gh` commands for this repo as `kunalavghade`:
-  `GH_TOKEN=$(gh auth token --user kunalavghade) gh pr view ...`, or ask the user to run
-  `gh auth switch --user kunalavghade`.
+History was rewritten on 2026-11-16 so every commit is authored by `kunalavghade` (no-reply
+address); do not reintroduce the work email or any AI attribution.
+
+- `main` = `8ff4ef5` (pushed).
+- `feat/p0-jobspec` → PR [kunalavghade/TrainMesh#2](https://github.com/kunalavghade/TrainMesh/pull/2):
+  Phase 0 (e2e tooling, single schema, proof of learning, module docs). Auto-fix is on.
+- `feat/p1-lan-mesh` (based on `feat/p0-jobspec`) → its own PR: Phase 1 (coordinator, agents,
+  mTLS, CLI mesh commands, mesh e2e). Merge it **after** PR #2; then rebase it onto `main`
+  (`git rebase --onto main feat/p0-jobspec feat/p1-lan-mesh`).
+- `feat/e2e-multinode` (local only) is contained in `feat/p0-jobspec`; delete it once PR #2 merges.
+- `gh`'s active account is `kunalavghade`; if a `gh` call is refused, check `gh auth status`.
 
 ### Done (do not redo)
 
@@ -89,6 +90,10 @@ Phase 0 from the architecture doc: `no_sync` gradient accumulation, safetensors 
 Phase 0 is complete (see `docs/TRAINMESH_ARCHITECTURE.md` §9): single protobuf schema with
 shared validation rules, learnable `teacher` dataset with validation accuracy, per-module docs
 in `docs/modules/`.
+
+Phase 1 is implemented and verified on one Mac and on minikube (see §10 status and
+`docs/modules/mesh.md`): `meshd`, `tm-agent`, tokens, CA + mTLS, liveness, scheduling,
+`trainmesh run --coordinator`, failure propagation.
 
 End-to-end tooling: `scripts/e2e/local.sh`, `scripts/e2e/minikube.sh`,
 `scripts/e2e/manual-node.sh`, `scripts/e2e/bench_config.py`, `scripts/e2e/compare.py` (+ tests),
@@ -180,28 +185,27 @@ touching configs. To change the schema: edit the `.proto`, `make generate`, add 
 
 ---
 
-## Task 4 — Phase 1, the LAN mesh (large; do in small pieces)
+## Task 4 — Finish Phase 1 (small items) and accept it on real machines
 
-This is the first step that actually connects PCs. Read architecture doc §4, §5.1, §5.3 and §5.14
-first. **Before starting, show the user this sub-step list and ask which one to start with.** Do
-each sub-step as its own small change with tests, and report after each.
+Phase 1 is built. Read `docs/modules/mesh.md` first. Remaining, each a small PR with tests:
 
-| # | Sub-step | Where | Done when |
-|---|----------|-------|-----------|
-| 4.1 | Node lifecycle state machine (JOINING → PROFILING → READY → BUSY / DEGRADED → LOST, DRAINING) as **pure** Go with a transition table and typed errors for illegal transitions | `internal/membership/state.go` + `state_test.go` | Table-driven tests cover every legal and illegal transition |
-| 4.2 | Join tokens: generate a 256-bit token, store only its SHA-256, single use, TTL from config, revoke | `internal/security/token.go` + tests (use an injected clock, no `time.Sleep`) | Tests for expired, reused, revoked and valid tokens |
-| 4.3 | Coordinator state store on bbolt behind a small `Store` interface | `internal/store/` | Tests use a temp-dir DB; interface allows an in-memory fake |
-| 4.4 | `coordinator.proto` with `Join`, `Heartbeat`, `ReportCapabilities` only | `proto/trainmesh/v1/` (`make generate`; add `protoc-gen-go-grpc` to `buf.gen.yaml`) | `buf lint` passes, Go code generates |
-| 4.5 | `meshd` binary: gRPC server for 4.4 using 4.1–4.3, **without TLS yet**, bound to localhost | `cmd/meshd/`, `internal/coordinator/` | An in-process test joins a fake node and sees it reach READY |
-| 4.6 | `tm-agent` binary: join with a token, heartbeat on an interval from config | `cmd/tm-agent/`, `internal/agent/` | Integration test: meshd + agent on one machine, node becomes READY, stop agent → node becomes LOST after the configured timeout |
-| 4.7 | mTLS (coordinator CA issues node certs at join) | `internal/security/` | Test: a node without a valid cert is rejected |
-| 4.8 | Agent-launched multi-node training (one rank per machine) | `internal/agent/`, `internal/launcher/` | The Phase 1 acceptance in `docs/E2E_TESTING.md` passes on two machines; ask the user to run it |
+| # | Item | Where | Done when |
+|---|------|-------|-----------|
+| 4.1 | **Physical acceptance** (ask the user to run it; you cannot) | `docs/E2E_TESTING.md` "Phase 1 acceptance on physical machines" | Two real machines join, one job runs one rank per machine with the same accuracy as one machine, killing one machine fails the job and marks it LOST; results recorded in the doc |
+| 4.2 | Token revocation | `RevokeToken` RPC (admin) + `trainmesh token revoke` + store flag already exists (`TokenRecord.Revoked`) | Revoked token is refused at Join (test) |
+| 4.3 | Drain / remove a node | `DrainNode`, `RemoveNode` RPCs; `DRAINING` state already in `internal/membership` | A drained node gets no new jobs; a removed node's heartbeats get NotFound and the agent exits with `ErrRemoved` (tests) |
+| 4.4 | Node certificate renewal | `RenewCertificate` RPC (node role); agent renews when < 1/3 of validity remains | Agent keeps working past its first certificate's expiry with an injected clock (test) |
+| 4.5 | Optional: mDNS discovery | `tm-agent --discover` finds `meshd` on the LAN | Only if the user wants it; join strings already carry the address |
 
-Rules for Task 4: no new dependency without telling the user which and why; every network call
-has a timeout from config; every retry has a max attempt count; every goroutine stops on context
-cancel; and no placeholder or mock implementations in non-test code.
+Rules: every new RPC goes into `methodRoles` (`internal/coordinator/auth.go`) or it is denied;
+regenerate with `make generate`; update `docs/modules/mesh.md`.
 
----
+## Task 5 — Phase 2 (GPU backends, profiler, heterogeneous batches)
+
+Start only after the user reviews Phase 1. Read architecture §5.4–5.6, §6 and §10 (P2). This Mac
+has Apple MPS (no NVIDIA/AMD): build and test the device abstraction for `cpu` and `mps`, write
+`cuda`/`rocm` paths with unit tests, and mark them "not verified on hardware". Ask the user
+before choosing the order of sub-steps.
 
 ## Reporting template (use after every task)
 

@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 2026-11-16. Phase 0 is complete; Phases 1–6 have not started (see `docs/TRAINMESH_ARCHITECTURE.md` §10).
+Updated 2026-11-16. Phase 0 is complete; Phase 1 is implemented and verified except on two physical machines; Phases 2–6 have not started (see `docs/TRAINMESH_ARCHITECTURE.md` §10).
 
 | Capability | Status | Evidence / limitation |
 |---|---|---|
@@ -15,9 +15,12 @@ Updated 2026-11-16. Phase 0 is complete; Phases 1–6 have not started (see `doc
 | Single config schema (protobuf) | Implemented and tested | `proto/trainmesh/v1/jobspec.proto` defines shape and rules (protovalidate); Go (`internal/config`) and Python (`trainmesh_runtime/config.py`) use generated types and the same rules; `make generate` regenerates |
 | Learnable task and validation | Implemented and tested | `teacher` dataset, held-out validation set, per-epoch `val_loss`/`val_accuracy` reduced across ranks; `python/tests/test_learning.py` requires ≥ 85% accuracy (measured ≈ 92–94%) |
 | Local benchmark JSON | Implemented and measured | `benchmark-results/local-two-rank.json`; one local smoke run, not a comparative benchmark |
-| Cluster identity and local status | Implemented | `.trainmesh/cluster.json`; no worker registry |
-| Enrollment, authenticated agent, heartbeats, revocation | Not implemented | No remote execution surface is exposed |
-| Multi-machine DDP | Runtime proven multi-node; CLI launch not implemented | Runtime trains across nodes when started by `torchrun` directly. Proven on a 2-node minikube cluster and with two node processes on one Mac: identical validation accuracy (91.70%) and loss as one node. Not yet run on two physical machines. No agent or CLI multi-node launch (Phase 1) |
+| Cluster identity and local status | Implemented (superseded) | `.trainmesh/cluster.json`; the mesh registry is `meshd` |
+| Coordinator `meshd` + agent `tm-agent` | Implemented and tested | gRPC `CoordinatorService`; bbolt state; scheduling onto READY nodes with PyTorch/runtime version check; job failure and cancel propagation; `internal/coordinator/mesh_test.go` runs real `meshd` + agents over mTLS |
+| Enrollment and authentication | Implemented and tested | Single-use, expiring join tokens (hash stored); join strings pin the CA hash; cluster CA issues node certificates from CSRs; mTLS with per-method roles (node vs admin); node certificates cannot impersonate the server |
+| Heartbeats and liveness | Implemented and tested | READY/BUSY/DEGRADED/LOST lifecycle; a LOST node fails its job and peers are cancelled; regression test for the "failed before peer started" race |
+| Revocation, drain, cert renewal, mDNS | Not implemented | Node certificates last 30 days; no revoke/drain/remove commands; join strings carry the coordinator address |
+| Multi-machine DDP through the CLI | Implemented; verified on one Mac and minikube | `trainmesh run --coordinator` trains across agents with identical loss and validation accuracy to one machine: 91.70% (2 agents on one Mac), 91.67% (agents on 2 minikube nodes). Not yet run on two physical machines |
 | End-to-end tests | Implemented and run | `scripts/e2e/local.sh` (CLI incl. learning check; CI on Linux), `scripts/e2e/minikube.sh` (2-node cluster; 1-vs-multi machine comparison with loss, accuracy and learning checks; memory preflight), `scripts/e2e/manual-node.sh` (physical machines) |
 | Adaptive pilot optimizer/network profiler | Not implemented | Planner reports configuration, not a measured optimum |
 | GPU/NCCL | Unsupported | No GPU required; CPU/Gloo only. Apple MPS is available on the dev Mac for Phase 2 |
