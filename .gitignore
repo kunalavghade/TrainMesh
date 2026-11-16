@@ -11,3 +11,4 @@ bin/
 /trainmesh
 *.log
 benchmark-results/latest.json
+benchmark-results/e2e/
