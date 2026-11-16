@@ -1,0 +1,148 @@
+// JobSpec is the single schema of a TrainMesh training job (YAML config `version: 1`).
+//
+// The Go CLI and the Python runtime both generate their types from this file and both enforce
+// the buf.validate rules below, so a config is judged by one rule set wherever it is loaded.
+// Zero values mean "use the default" unless a field is marked optional.
+syntax = "proto3";
+
+package trainmesh.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/trainmesh/trainmesh/internal/gen/trainmesh/v1;trainmeshv1";
+
+message JobSpec {
+  int32 version = 1 [(buf.validate.field).cel = {
+    id: "version"
+    message: "version must be 1"
+    expression: "this == 1"
+  }];
+  Cluster cluster = 2;
+  Run run = 3;
+  Execution execution = 4 [(buf.validate.field).required = true];
+  Training training = 5 [(buf.validate.field).required = true];
+  // Free-form settings of the future adaptive planner (Phase 6). The legacy top-level
+  // `optimizer:` key is migrated here on load.
+  google.protobuf.Struct planner = 6;
+}
+
+message Cluster {
+  string name = 1;
+}
+
+message Run {
+  string name = 1;
+  // Seed for model init, data generation and sampling. Unset means 42.
+  optional int64 seed = 2;
+  // Checkpoint directory to resume from; the CLI --resume flag overrides it.
+  string resume = 3;
+  // Rank 0 writes the result JSON here when set.
+  string results_path = 4;
+}
+
+message Execution {
+  string strategy = 1 [(buf.validate.field).cel = {
+    id: "execution.strategy"
+    message: "only execution.strategy=data_parallel is implemented"
+    expression: "this == 'data_parallel'"
+  }];
+  // Machines in the job. The CLI can launch only 1 until the Phase 1 agent exists.
+  int32 workers = 2 [(buf.validate.field).int32.gte = 1];
+  int32 processes_per_worker = 3 [(buf.validate.field).int32.gte = 1];
+  // Intra-op threads per rank; 0 means OMP_NUM_THREADS or 1.
+  int32 cpu_threads_per_rank = 4 [(buf.validate.field).int32.gte = 0];
+  Backend backend = 5 [(buf.validate.field).required = true];
+  Rendezvous rendezvous = 6;
+}
+
+message Backend {
+  string device = 1 [(buf.validate.field).cel = {
+    id: "execution.backend.device"
+    message: "this release supports device=cpu only; CUDA/NCCL is not available"
+    expression: "this == 'cpu'"
+  }];
+  string communication = 2 [(buf.validate.field).cel = {
+    id: "execution.backend.communication"
+    message: "this release supports communication=gloo only"
+    expression: "this == 'gloo'"
+  }];
+}
+
+// Informational today; the launcher always uses a static local rendezvous.
+message Rendezvous {
+  string backend = 1;
+  string endpoint = 2;
+}
+
+message Training {
+  Model model = 1;
+  Dataset dataset = 2 [(buf.validate.field).required = true];
+  Optimizer optimizer = 3;
+  Batch batch = 4 [(buf.validate.field).required = true];
+  int32 epochs = 5 [(buf.validate.field).int32.gt = 0];
+  // Empty means fp32.
+  string precision = 6 [(buf.validate.field).cel = {
+    id: "training.precision"
+    message: "only fp32 precision is currently supported"
+    expression: "this in ['', 'fp32']"
+  }];
+  Checkpoint checkpoint = 7;
+  Validation validation = 8;
+}
+
+message Model {
+  // Empty means mlp.
+  string type = 1 [(buf.validate.field).cel = {
+    id: "training.model.type"
+    message: "only training.model.type=mlp is supported"
+    expression: "this in ['', 'mlp']"
+  }];
+  // Zero sizes fall back to the dataset sizes (input/output) or 64 (hidden).
+  int32 input_size = 2 [(buf.validate.field).int32.gte = 0];
+  int32 hidden_size = 3 [(buf.validate.field).int32.gte = 0];
+  int32 output_size = 4 [(buf.validate.field).int32.gte = 0];
+}
+
+message Dataset {
+  // synthetic: random labels, nothing to learn (throughput tests).
+  // teacher: labels from a fixed random teacher network, learnable (accuracy tests).
+  string type = 1 [(buf.validate.field).cel = {
+    id: "training.dataset.type"
+    message: "training.dataset.type must be synthetic or teacher"
+    expression: "this in ['synthetic', 'teacher']"
+  }];
+  int32 samples = 2 [(buf.validate.field).int32.gt = 0];
+  // Zero sizes mean 32 inputs and 4 classes.
+  int32 input_size = 3 [(buf.validate.field).int32.gte = 0];
+  int32 output_size = 4 [(buf.validate.field).int32.gte = 0];
+}
+
+message Optimizer {
+  // Empty means adam.
+  string name = 1 [(buf.validate.field).cel = {
+    id: "training.optimizer.name"
+    message: "training.optimizer.name must be adam or sgd"
+    expression: "this in ['', 'adam', 'sgd']"
+  }];
+  // Zero means 0.001.
+  double learning_rate = 2 [(buf.validate.field).double.gte = 0];
+}
+
+message Batch {
+  int32 per_rank = 1 [(buf.validate.field).int32.gt = 0];
+  // Zero means 1.
+  int32 gradient_accumulation_steps = 2 [(buf.validate.field).int32.gte = 0];
+}
+
+message Checkpoint {
+  // Unset means enabled.
+  optional bool enabled = 1;
+  // Empty means ./checkpoints.
+  string directory = 2;
+}
+
+message Validation {
+  // Held-out samples evaluated after every epoch; 0 disables validation.
+  int32 samples = 1 [(buf.validate.field).int32.gte = 0];
+}

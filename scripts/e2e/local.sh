@@ -11,7 +11,10 @@ CLI=$ROOT/bin/trainmesh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/trainmesh-e2e-local.XXXXXX")
 RANKS=2
 GLOBAL_BATCH=128
-SAMPLES=4096
+SAMPLES=8192
+VALIDATION_SAMPLES=2048
+# Measured: this model reaches ~93% validation accuracy on the teacher task after 3 epochs.
+MIN_ACCURACY=0.85
 STEPS_PER_EPOCH=$((SAMPLES / GLOBAL_BATCH))
 
 cleanup() {
@@ -45,6 +48,7 @@ write_config() {
     --name e2e-local --machines 1 --ranks-per-machine "$RANKS" \
     --global-batch "$GLOBAL_BATCH" --samples "$SAMPLES" \
     --input-size 32 --hidden-size 64 --output-size 4 --epochs "$epochs" \
+    --dataset teacher --validation-samples "$VALIDATION_SAMPLES" \
     --checkpoint-dir "$WORK/checkpoints" --results-path "$WORK/result.json" >"$WORK/config.yaml"
 }
 
@@ -78,6 +82,16 @@ write_config 3
 expect_equal "resumed epoch" "$(json_field "$WORK/checkpoints/latest/metadata.json" epoch)" "3"
 expect_equal "resumed global_step" \
   "$(json_field "$WORK/checkpoints/latest/metadata.json" global_step)" "$((3 * STEPS_PER_EPOCH))"
+
+log "model learned (validation accuracy after 3 epochs, chance = 25%)"
+"$PYTHON" - "$WORK/result.json" "$MIN_ACCURACY" <<'EOF' || fail "validation accuracy below threshold"
+import json, sys
+validation = json.load(open(sys.argv[1]))["validation"]
+accuracy, history = validation["final_accuracy"], validation["accuracy_history"]
+print(f"[e2e-local] validation accuracy history {['%.3f' % a for a in history]}")
+sys.exit(0 if accuracy >= float(sys.argv[2]) else 1)
+EOF
+log "ok: validation accuracy >= $MIN_ACCURACY"
 
 log "benchmark"
 "$CLI" benchmark --config "$WORK/config.yaml" --output "$WORK/bench.json" >"$WORK/bench.log" 2>&1 ||

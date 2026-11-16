@@ -2,6 +2,7 @@
 
 With a fixed global batch, DistributedSampler gives every optimizer step the same samples no
 matter how many ranks share them, so single- and multi-machine runs must reach the same loss.
+The default `teacher` dataset is learnable, so validation accuracy proves training worked.
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ DEFAULT_SAMPLES = 65_536
 DEFAULT_INPUT_SIZE = 256
 DEFAULT_HIDDEN_SIZE = 1024
 DEFAULT_OUTPUT_SIZE = 10
-DEFAULT_EPOCHS = 2
+DEFAULT_EPOCHS = 3
+DEFAULT_DATASET = "teacher"
+DEFAULT_VALIDATION_SAMPLES = 4096
 
 TEMPLATE = """version: 1
 run:
@@ -33,7 +36,7 @@ training:
     hidden_size: {hidden_size}
     output_size: {output_size}
   dataset:
-    type: synthetic
+    type: {dataset}
     samples: {samples}
     input_size: {input_size}
     output_size: {output_size}
@@ -42,6 +45,7 @@ training:
   epochs: {epochs}
   precision: fp32
   checkpoint: {{enabled: {checkpoint_enabled}, directory: {checkpoint_dir}}}
+  validation: {{samples: {validation_samples}}}
 """
 
 
@@ -62,6 +66,8 @@ def render(args: argparse.Namespace) -> str:
         hidden_size=args.hidden_size,
         output_size=args.output_size,
         samples=args.samples,
+        dataset=args.dataset,
+        validation_samples=args.validation_samples,
         per_rank=per_rank_batch(args.global_batch, world_size),
         epochs=args.epochs,
         checkpoint_enabled="true" if args.checkpoint_dir else "false",
@@ -81,6 +87,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--output-size", type=int, default=DEFAULT_OUTPUT_SIZE)
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
+    parser.add_argument("--dataset", choices=["teacher", "synthetic"], default=DEFAULT_DATASET)
+    parser.add_argument("--validation-samples", type=int, default=DEFAULT_VALIDATION_SAMPLES)
     parser.add_argument("--checkpoint-dir", default="", help="empty disables checkpoints")
     parser.add_argument("--results-path", default="", help="rank 0 writes its result JSON here")
     return parser.parse_args(argv)

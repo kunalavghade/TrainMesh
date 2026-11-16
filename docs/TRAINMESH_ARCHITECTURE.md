@@ -1,7 +1,8 @@
 # TrainMesh — Architecture Review and Target Architecture
 
 > Status: **authoritative design document**. Updated 2026-11-14.
-> Supersedes the single-host description in [ARCHITECTURE.md](ARCHITECTURE.md).
+> How the code works *today*, module by module: [modules/README.md](modules/README.md).
+> What is implemented, with evidence: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 > Scope: what TrainMesh is meant to be, what exists today, what is wrong with it, the corrected
 > architecture, and the phased path to build it.
 
@@ -546,8 +547,14 @@ host memory, write in the background). Replicated to `ckpt.replicas` peers (defa
 
 The schema is defined once, in `proto/trainmesh/v1/jobspec.proto`, and generates Go
 (`protoc-gen-go`), Rust (`prost`) and Python (`betterproto` / `protobuf`) types. YAML is parsed into
-it at the CLI. Validation lives in one place (Go, at submit time) and is enforced again cheaply by
-the worker via generated types. This removes the duplicated validators.
+it at the CLI. This removes the duplicated validators.
+
+**Implemented in Phase 0 (2026-11-16).** The rules live *in the schema* as
+[protovalidate](https://protovalidate.com) annotations, and both the Go CLI
+(`buf.build/go/protovalidate`) and the Python runtime (`protovalidate` 1.x on Google `protobuf`)
+evaluate them, so the runtime is safe even when started by hand with torchrun. Details:
+[modules/config.md](modules/config.md). The sketch below is the *target* (v2) shape; the
+implemented v1 schema mirrors today's YAML.
 
 Sketch:
 
@@ -750,10 +757,11 @@ Conventions: Go tests next to source (`*_test.go`, table-driven); Rust unit test
 
 Do these first (Phase 0), even before the mesh work, because they carry over.
 
-**Phase 0 status (2026-11-14):** everything below is done except two items:
-- The protobuf schema. It needs a `protoc`/`buf` toolchain, so the Python validator still
-  duplicates the Go one.
-- Async checkpoint writes, which moved to P5.
+**Phase 0 status (2026-11-16): complete.** Every row below is done; async checkpoint writes
+moved to P5. The single schema landed on 2026-11-16 (`proto/trainmesh/v1/jobspec.proto`, rules
+evaluated in Go and Python). Phase 0 also added proof that distributed training works: a
+learnable `teacher` task with held-out validation accuracy, and e2e checks that one machine and
+two machines reach the same model (see [E2E_TESTING.md](E2E_TESTING.md)).
 
 Evidence:
 - `python/tests/test_accumulation.py` fails without `no_sync` (8 all-reduces instead of 2) and
@@ -762,6 +770,10 @@ Evidence:
 - On Ctrl-C the launcher kills the whole rank process group (`internal/launcher/procgroup_unix_test.go`).
 - Throughput on the reference host matches the pre-refactor baseline within run-to-run noise
   (≈ 101k–129k vs 116k samples/s, identical loss).
+- One schema: `internal/config` tests and `python/tests/test_learning.py` load the same rules;
+  `examples/cpu-ddp.yaml` is validated in a Go test.
+- Learning: 1 node × 4 ranks and 2 nodes × 2 ranks reach identical validation accuracy
+  (91.70%) and loss on this Mac and on a 2-node minikube cluster.
 
 `torchrun --standalone` was tried for the port race and rejected: its c10d store ignores
 `USE_LIBUV=0` and hangs on macOS. The launcher instead retries on a new port (max 3 attempts).
@@ -833,7 +845,7 @@ Durations are planning placeholders; adjust to available time.
 | Chaos | Kill a worker, kill an island, partition the network, corrupt a shard/checkpoint | E2E scenarios with assertions on recovery time and lost work |
 | Security | Expired/reused token, wrong cert, tampered assignment, pickle payload rejected | Go + Python tests |
 | Performance | Step-time breakdown and scaling efficiency per topology, stored as JSON baselines; CI flags regressions above a threshold | benchmark harness (`trainmesh benchmark`), results under `benchmark-results/` |
-| Physical acceptance | Real machines: NVIDIA PC + Mac + CPU box, LAN and over the internet | Manual protocol in `MULTI_MACHINE_MANUAL_TEST.md`, updated per phase |
+| Physical acceptance | Real machines: NVIDIA PC + Mac + CPU box, LAN and over the internet | `scripts/e2e/manual-node.sh` and the protocol in `E2E_TESTING.md`, updated per phase |
 
 ---
 
@@ -850,7 +862,7 @@ Each becomes a file in `docs/adr/`.
 | 005 | **DiLoCo** as the default WAN strategy | Synchronous compressed DDP, fully async SGD | Orders-of-magnitude less traffic, tolerates slow/lost islands, strong published results for LLM training. |
 | 006 | **QUIC + mTLS**, optional WireGuard overlay, relay fallback | Plain TCP, VPN required | NAT-friendly, multiplexed streams, encrypted by default; works with no user network setup. |
 | 007 | **safetensors + BLAKE3** for all artifacts | pickle (`torch.save`) | No code execution on load; fast verified content addressing. |
-| 008 | **Protobuf as the single schema** | Hand-written Go + Python validators | One source of truth for Go/Rust/Python; versioned wire format. |
+| 008 | **Protobuf as the single schema, rules via protovalidate** | Hand-written Go + Python validators; JSON Schema | One source of truth for shape *and* rules in Go/Rust/Python; versioned wire format. Implemented in P0. |
 | 009 | **bbolt first, Raft later** for coordinator state | etcd, Postgres | No external dependency on a desktop; clear upgrade path to HA. |
 
 ---
