@@ -1,66 +1,82 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func valid() Config {
-	return Config{
-		Version:   1,
-		Execution: Execution{Strategy: "data_parallel", Workers: 2, ProcessesPerWorker: 1, Backend: Backend{Device: "cpu", Communication: "gloo"}},
-		Training:  Training{Dataset: Dataset{Type: "synthetic", Samples: 1024}, Batch: Batch{PerRank: 16, GradientAccumulationSteps: 2}, Epochs: 1, Precision: "fp32"},
+const validYAML = `version: 1
+execution:
+  strategy: data_parallel
+  workers: 2
+  processes_per_worker: 1
+  backend: {device: cpu, communication: gloo}
+training:
+  dataset: {type: synthetic, samples: 1024}
+  batch: {per_rank: 16, gradient_accumulation_steps: 2}
+  epochs: 1
+  precision: fp32
+`
+
+func mustParse(t *testing.T, yaml string) Config {
+	t.Helper()
+	c, err := Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
 	}
+	return c
 }
 
 func TestGlobalBatchSize(t *testing.T) {
-	if got := valid().GlobalBatchSize(); got != 64 {
+	if got := mustParse(t, validYAML).GlobalBatchSize(); got != 64 {
 		t.Fatalf("got %d, want 64", got)
 	}
 }
 
-func TestValidateRejects(t *testing.T) {
+func TestAccumulationStepsDefaultsToOne(t *testing.T) {
+	c := mustParse(t, strings.Replace(validYAML, ", gradient_accumulation_steps: 2", "", 1))
+	if got := c.AccumulationSteps(); got != 1 {
+		t.Fatalf("AccumulationSteps() = %d, want 1", got)
+	}
+}
+
+func TestParseRejects(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(*Config)
-		want   string
+		name    string
+		replace [2]string
+		want    string
 	}{
-		{"gpu backend", func(c *Config) { c.Execution.Backend.Device = "cuda" }, "device=cpu"},
-		{"zero batch", func(c *Config) { c.Training.Batch.PerRank = 0 }, "per-rank batch"},
-		{"negative threads", func(c *Config) { c.Execution.CPUThreadsPerRank = -1 }, "cpu_threads_per_rank"},
+		{"gpu backend", [2]string{"device: cpu", "device: cuda"}, "execution.backend.device: this release supports device=cpu only"},
+		{"zero batch", [2]string{"per_rank: 16", "per_rank: 0"}, "training.batch.per_rank"},
+		{"negative threads", [2]string{"processes_per_worker: 1", "processes_per_worker: 1\n  cpu_threads_per_rank: -1"}, "execution.cpu_threads_per_rank"},
+		{"unknown dataset", [2]string{"type: synthetic", "type: imagenet"}, "training.dataset.type must be synthetic or teacher"},
+		{"unknown key", [2]string{"epochs: 1", "epochs: 1\n  epoch: 2"}, "unknown field"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := valid()
-			tt.mutate(&c)
-			err := c.Validate()
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Validate() = %v, want error containing %q", err, tt.want)
+			_, err := Parse([]byte(strings.Replace(validYAML, tt.replace[0], tt.replace[1], 1)))
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Parse() = %v, want ErrInvalid containing %q", err, tt.want)
 			}
 		})
 	}
 }
 
-func TestValidateReportsEveryProblem(t *testing.T) {
-	c := valid()
-	c.Version = 2
-	c.Training.Precision = "fp16"
-	err := c.Validate()
-	if err == nil || !strings.Contains(err.Error(), "version") || !strings.Contains(err.Error(), "fp32") {
-		t.Fatalf("Validate() = %v, want both version and precision problems", err)
+func TestParseReportsEveryProblem(t *testing.T) {
+	broken := strings.NewReplacer("version: 1", "version: 2", "precision: fp32", "precision: fp16").Replace(validYAML)
+	_, err := Parse([]byte(broken))
+	if err == nil || !strings.Contains(err.Error(), "version must be 1") || !strings.Contains(err.Error(), "only fp32") {
+		t.Fatalf("Parse() = %v, want both version and precision problems", err)
 	}
 }
 
 func TestLoadMigratesLegacyOptimizerKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	yaml := `version: 1
-execution: {strategy: data_parallel, workers: 1, processes_per_worker: 1, backend: {device: cpu, communication: gloo}}
-training: {dataset: {type: synthetic, samples: 8}, batch: {per_rank: 2, gradient_accumulation_steps: 1}, epochs: 1, precision: fp32}
-optimizer: {enabled: false, results: out/result.json}
-`
-	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+	legacy := validYAML + "optimizer: {enabled: false, results: out/result.json}\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,10 +88,17 @@ optimizer: {enabled: false, results: out/result.json}
 	if !c.UsesLegacyOptimizerKey() {
 		t.Error("expected legacy optimizer key to be detected")
 	}
-	if c.Run.ResultsPath != "out/result.json" {
-		t.Errorf("ResultsPath = %q, want out/result.json", c.Run.ResultsPath)
+	if got := c.Spec.GetRun().GetResultsPath(); got != "out/result.json" {
+		t.Errorf("results_path = %q, want out/result.json", got)
 	}
-	if _, hasResults := c.Planner["results"]; hasResults || c.Planner["enabled"] != false {
-		t.Errorf("Planner = %v, want {enabled:false} without results", c.Planner)
+	planner := c.Spec.GetPlanner().AsMap()
+	if _, hasResults := planner["results"]; hasResults || planner["enabled"] != false {
+		t.Errorf("planner = %v, want {enabled:false} without results", planner)
+	}
+}
+
+func TestExampleConfigIsValid(t *testing.T) {
+	if _, err := Load(filepath.Join("..", "..", "examples", "cpu-ddp.yaml")); err != nil {
+		t.Fatalf("examples/cpu-ddp.yaml: %v", err)
 	}
 }

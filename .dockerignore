@@ -1,0 +1,11 @@
+.git
+.venv
+.trainmesh
+bin
+checkpoints
+benchmark-results
+trainmesh
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.egg-info

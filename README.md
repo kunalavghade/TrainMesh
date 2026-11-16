@@ -27,7 +27,7 @@ go build -o bin/trainmesh ./cmd/trainmesh
 ./bin/trainmesh run --config examples/cpu-ddp.yaml
 ```
 
-The example uses deterministic synthetic data, a small MLP, two CPU ranks, Gloo gradient synchronization, and saves a verified safetensors checkpoint in `checkpoints/latest/`. The global batch is `per_rank × world_size × accumulation_steps`; this example has `64 × 2 × 1 = 128`.
+The example trains a small MLP on the learnable synthetic `teacher` task, reports validation accuracy every epoch (chance is 25%), uses two CPU ranks, Gloo gradient synchronization, and saves a verified safetensors checkpoint in `checkpoints/latest/`. The global batch is `per_rank × world_size × accumulation_steps`; this example has `64 × 2 × 1 = 128`.
 
 ## Commands
 
@@ -37,15 +37,16 @@ The example uses deterministic synthetic data, a small MLP, two CPU ranks, Gloo 
 - `trainmesh run --config ...` launches local CPU training through torchrun.
 - `trainmesh benchmark --config ... --output benchmark-results/run.json` records actual runtime metrics.
 
-Remote workers are deliberately reported as unsupported until the authenticated agent and multi-node launcher are complete. A local multi-process test is not a substitute for multi-machine validation. Use [the manual Multipass and two-host guide](docs/MULTI_MACHINE_MANUAL_TEST.md) for reproducible validation steps and current environment limits.
+Remote workers are deliberately reported as unsupported until the authenticated agent and multi-node launcher are complete. A local multi-process test is not a substitute for multi-machine validation. Multi-machine training is proven today by starting torchrun directly (minikube and physical-machine scripts in [E2E testing](docs/E2E_TESTING.md)); launching it through the CLI is Phase 1.
 
 ## Docs
 
-- [Architecture review and target design](docs/TRAINMESH_ARCHITECTURE.md) (start here)
+- [Documentation index](docs/README.md) — what each document covers
+- [Architecture review, target design and roadmap](docs/TRAINMESH_ARCHITECTURE.md) (start here)
+- [Module map: how the current code works](docs/modules/README.md)
 - [CPU backend setup](docs/CPU_BACKEND.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Manual integration test](docs/MULTI_MACHINE_MANUAL_TEST.md)
+- [End-to-end and multi-machine testing](docs/E2E_TESTING.md)
 - [Implementation status](docs/IMPLEMENTATION_STATUS.md)
-- [Roadmap](docs/ROADMAP.md)
+- [Next steps (handoff)](docs/NEXT_STEPS.md)
 
 License: Apache-2.0.
