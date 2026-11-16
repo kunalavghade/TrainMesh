@@ -13,7 +13,7 @@ import (
 const defaultConfigPath = "examples/cpu-ddp.yaml"
 
 // ErrMultiMachineUnsupported is returned until the agent-based multi-node launcher exists.
-var ErrMultiMachineUnsupported = errors.New("multi-machine execution is not yet implemented; set execution.workers: 1 (see docs/TRAINMESH_ARCHITECTURE.md, phase P1)")
+var ErrMultiMachineUnsupported = errors.New("execution.workers > 1 runs across machines: start meshd, join the machines with tm-agent, then pass --coordinator host:port (see docs/modules/mesh.md)")
 
 func planCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "plan", Short: "Validate configuration and show an execution plan", RunE: func(cmd *cobra.Command, _ []string) error {
@@ -54,6 +54,9 @@ func planCommand() *cobra.Command {
 func runCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "run", Short: "Run a real PyTorch CPU/Gloo training job", RunE: func(cmd *cobra.Command, _ []string) error {
 		path, _ := cmd.Flags().GetString("config")
+		if coordinator, _ := cmd.Flags().GetString("coordinator"); coordinator != "" {
+			return runOnMesh(cmd, path)
+		}
 		resume, _ := cmd.Flags().GetString("resume")
 		var extra []string
 		if resume != "" {
@@ -63,6 +66,11 @@ func runCommand() *cobra.Command {
 	}}
 	cmd.Flags().String("config", defaultConfigPath, "YAML training configuration")
 	cmd.Flags().String("resume", "", "resume from a verified checkpoint directory")
+	addAdminFlags(cmd, "")
+	cmd.Flags().Lookup("coordinator").Usage = "run across machines through this meshd (host:port); empty runs on this machine"
+	cmd.Flags().String("output", "", "with --coordinator: also write rank 0's result JSON here")
+	cmd.Flags().Duration("poll-interval", defaultPollInterval, "with --coordinator: how often to check the job")
+	cmd.Flags().Duration("timeout", defaultJobTimeout, "with --coordinator: cancel the job if it runs longer")
 	return cmd
 }
 

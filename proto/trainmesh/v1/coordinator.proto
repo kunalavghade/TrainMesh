@@ -1,0 +1,176 @@
+// CoordinatorService is the control-plane API of `meshd`.
+//
+// Transport is gRPC over TLS 1.3. Join is the only call that works without a client
+// certificate; agents then use the node certificate it returns, and the CLI uses the admin
+// certificate created by `meshd init`. Agents only dial out: work reaches them as directives in
+// heartbeat responses, so machines need no inbound control port.
+syntax = "proto3";
+
+package trainmesh.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/trainmesh/trainmesh/internal/gen/trainmesh/v1;trainmeshv1";
+
+service CoordinatorService {
+  // Agent, no client certificate: trade a single-use join token and a CSR for a node identity.
+  rpc Join(JoinRequest) returns (JoinResponse);
+  // Agent: liveness and capability report; the response carries directives to act on.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Agent: progress or outcome of this node's part of a job.
+  rpc ReportAssignment(ReportAssignmentRequest) returns (ReportAssignmentResponse);
+
+  // Admin: create a join token and return the join string to give to a new machine.
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  // Admin: every node with its state and capabilities.
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  // Admin: start a job on READY nodes (execution.workers of them).
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  // Admin: job state, per-node assignments and, when finished, rank 0's result JSON.
+  rpc GetJob(GetJobRequest) returns (GetJobResponse);
+  // Admin: stop a running job on every node.
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+}
+
+message Capabilities {
+  string hostname = 1;
+  string os = 2;
+  string arch = 3;
+  int32 logical_cpus = 4;
+  uint64 memory_bytes = 5;
+  string runtime_version = 6;
+  string torch_version = 7;
+}
+
+message JoinRequest {
+  string token = 1;
+  // PKCS#10 request for the node's key; the coordinator sets the identity, not the CSR.
+  bytes csr_der = 2;
+}
+
+message JoinResponse {
+  string node_id = 1;
+  bytes certificate_der = 2;
+  bytes ca_certificate_der = 3;
+  int32 heartbeat_interval_ms = 4;
+}
+
+message HeartbeatRequest {
+  Capabilities capabilities = 1;
+  // IP address other nodes use to reach this machine (rendezvous and Gloo traffic).
+  string address = 2;
+  // Network interface that owns `address`; used for GLOO_SOCKET_IFNAME.
+  string interface = 3;
+}
+
+message HeartbeatResponse {
+  string state = 1;
+  repeated Directive directives = 2;
+  int32 heartbeat_interval_ms = 3;
+}
+
+message Directive {
+  oneof kind {
+    StartAssignment start = 1;
+    CancelAssignment cancel = 2;
+  }
+}
+
+// Run node `node_rank` of a job: torchrun --nnodes=machines --node_rank=node_rank
+// --nproc_per_node=ranks_per_machine --master_addr --master_port with config_yaml.
+message StartAssignment {
+  string job_id = 1;
+  int32 node_rank = 2;
+  int32 machines = 3;
+  int32 ranks_per_machine = 4;
+  string master_addr = 5;
+  int32 master_port = 6;
+  bytes config_yaml = 7;
+}
+
+message CancelAssignment {
+  string job_id = 1;
+  string reason = 2;
+}
+
+message ReportAssignmentRequest {
+  string job_id = 1;
+  // RUNNING, SUCCEEDED, FAILED or CANCELLED.
+  string state = 2;
+  string message = 3;
+  // Rank 0's result JSON, sent by node rank 0 on success.
+  bytes result_json = 4;
+}
+
+message ReportAssignmentResponse {}
+
+message CreateTokenRequest {
+  int64 ttl_seconds = 1;
+  int32 uses = 2;
+}
+
+message CreateTokenResponse {
+  string join_string = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message Node {
+  string id = 1;
+  string state = 2;
+  string address = 3;
+  string interface = 4;
+  Capabilities capabilities = 5;
+  google.protobuf.Timestamp joined_at = 6;
+  google.protobuf.Timestamp last_heartbeat = 7;
+  string current_job_id = 8;
+}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+}
+
+message SubmitJobRequest {
+  // The job config (YAML, version 1); execution.workers machines are used.
+  bytes config_yaml = 1;
+}
+
+message SubmitJobResponse {
+  string job_id = 1;
+}
+
+message Assignment {
+  string node_id = 1;
+  int32 node_rank = 2;
+  string state = 3;
+  string message = 4;
+}
+
+message Job {
+  string id = 1;
+  string state = 2;
+  int32 machines = 3;
+  int32 ranks_per_machine = 4;
+  string master_addr = 5;
+  int32 master_port = 6;
+  repeated Assignment assignments = 7;
+  bytes result_json = 8;
+  string error = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp finished_at = 11;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message GetJobResponse {
+  Job job = 1;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {}

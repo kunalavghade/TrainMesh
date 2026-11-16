@@ -820,6 +820,16 @@ gantt
 
 Durations are planning placeholders; adjust to available time.
 
+**Phase 1 status (2026-11-16): implemented, verified on one Mac and on a 2-node minikube cluster;
+two-physical-machine acceptance pending.** Built: `meshd`, `tm-agent`, single-use join tokens with
+CA-pinned join strings, a cluster CA with mTLS and per-method roles, a bbolt state store, the node
+lifecycle with heartbeat liveness, scheduling onto READY nodes with version checks,
+agent-launched multi-node torchrun, job failure/cancel propagation, and CLI commands (`token`,
+`nodes`, `job`, `run --coordinator`). Not built in P1: mDNS discovery (join strings carry the
+address instead), certificate renewal, token revocation / node drain and removal commands, and
+"restart resumes from checkpoint" (moved to P5 with the other recovery work). See
+[modules/mesh.md](modules/mesh.md) and [E2E_TESTING.md](E2E_TESTING.md) levels 1b and 2b.
+
 | Phase | Scope | Acceptance criteria |
 |-------|-------|---------------------|
 | **P0 — Cleanup & correctness** | §9 fix list, git + CI, proto schema v1, config v2 parser with v1 compatibility | `no_sync` test proves 1 all-reduce per optimizer step; no throughput regression vs the current baseline (numbers recorded); no pickle loads; Go/Python lint + tests green in CI. |

@@ -124,3 +124,26 @@ func mustWrite(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+func TestMultiNodeArgsAndEnv(t *testing.T) {
+	spec := Spec{
+		ConfigPath: "/c.yaml", RuntimeDir: "/rt", ThreadsPerRank: 1, LocalRanks: 2,
+		Nodes: 3, NodeRank: 1, MasterAddr: "10.0.0.5", MasterPort: 29500, Interface: "en0",
+	}
+
+	args := strings.Join(spec.Args(), " ")
+	for _, want := range []string{"--nnodes=3", "--node_rank=1", "--nproc_per_node=2", "--master_addr=10.0.0.5", "--master_port=29500"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("Args() = %q, missing %q", args, want)
+		}
+	}
+	if got := lookupEnv(spec.Env([]string{"GLOO_SOCKET_IFNAME=lo0"}, "darwin"), "GLOO_SOCKET_IFNAME"); got != "en0" {
+		t.Errorf("GLOO_SOCKET_IFNAME = %q, want the assigned interface en0", got)
+	}
+	if got := lookupEnv(Spec{Nodes: 2}.Env(nil, "darwin"), "GLOO_SOCKET_IFNAME"); got != "" {
+		t.Errorf("multi-node job pinned to loopback: %q", got)
+	}
+	if !strings.Contains(strings.Join(Spec{LocalRanks: 1, Nodes: 2}.Args(), " "), "torch.distributed.run") {
+		t.Error("one rank per machine must still use torchrun for a multi-machine job")
+	}
+}

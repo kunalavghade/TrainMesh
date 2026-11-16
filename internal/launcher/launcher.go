@@ -20,7 +20,7 @@ const (
 	DefaultGracePeriod = 10 * time.Second
 	// maxPortAttempts bounds relaunches when another process grabs the chosen rendezvous port.
 	maxPortAttempts = 3
-	masterAddr      = "127.0.0.1"
+	loopbackAddr    = "127.0.0.1"
 )
 
 // portConflictMarker is how c10d reports a rendezvous port taken between selection and bind.
@@ -29,7 +29,8 @@ var portConflictMarker = []byte("address already in use")
 // loopbackInterfaceByOS pins Gloo to loopback for single-host jobs where auto-detection misbehaves.
 var loopbackInterfaceByOS = map[string]string{"darwin": "lo0"}
 
-// Spec fully describes one local training launch.
+// Spec fully describes one training launch on this host. For a multi-machine job (Nodes > 1)
+// the coordinator supplies NodeRank, MasterAddr and MasterPort, and every machine runs one Spec.
 type Spec struct {
 	Python         string   // interpreter path
 	RuntimeDir     string   // directory that contains the trainmesh_runtime package
@@ -37,7 +38,12 @@ type Spec struct {
 	LocalRanks     int      // processes on this host
 	ThreadsPerRank int      // intra-op CPU threads per rank
 	ExtraArgs      []string // forwarded to the runtime, e.g. --resume, --output
-	MasterPort     int      // static rendezvous port; set by Run for multi-rank jobs
+	Nodes          int      // machines in the job; 0 or 1 means this host only
+	NodeRank       int      // this machine's rank among Nodes
+	MasterAddr     string   // rendezvous host (node rank 0); defaults to loopback
+	MasterPort     int      // static rendezvous port; chosen by Run for single-host jobs
+	Interface      string   // NIC for Gloo traffic (GLOO_SOCKET_IFNAME); empty = OS default
+	WorkDir        string   // working directory of the runtime (relative checkpoint paths)
 	Stdout         io.Writer
 	Stderr         io.Writer
 	GracePeriod    time.Duration
@@ -47,15 +53,19 @@ type Spec struct {
 // because the c10d rendezvous store ignores USE_LIBUV=0 and fails on macOS.
 func (s Spec) Args() []string {
 	runtimeArgs := append([]string{"-m", runtimeModule, "--config", s.ConfigPath}, s.ExtraArgs...)
-	if s.LocalRanks <= 1 {
+	if !s.usesTorchrun() {
 		return runtimeArgs
+	}
+	master := s.MasterAddr
+	if master == "" {
+		master = loopbackAddr
 	}
 	torchrun := []string{
 		"-m", "torch.distributed.run",
-		"--nnodes=1",
-		"--node_rank=0",
-		"--nproc_per_node=" + strconv.Itoa(s.LocalRanks),
-		"--master_addr=" + masterAddr,
+		"--nnodes=" + strconv.Itoa(max(1, s.Nodes)),
+		"--node_rank=" + strconv.Itoa(s.NodeRank),
+		"--nproc_per_node=" + strconv.Itoa(max(1, s.LocalRanks)),
+		"--master_addr=" + master,
 		"--master_port=" + strconv.Itoa(s.MasterPort),
 	}
 	return append(torchrun, runtimeArgs...)
@@ -73,11 +83,17 @@ func (s Spec) Env(base []string, goos string) []string {
 		"OMP_NUM_THREADS="+strconv.Itoa(max(1, s.ThreadsPerRank)),
 		"USE_LIBUV=0",
 	)
-	if iface, ok := loopbackInterfaceByOS[goos]; ok && lookupEnv(base, "GLOO_SOCKET_IFNAME") == "" {
+	switch iface, hasLoopbackDefault := loopbackInterfaceByOS[goos]; {
+	case s.Interface != "":
+		env = append(env, "GLOO_SOCKET_IFNAME="+s.Interface)
+	case hasLoopbackDefault && !s.isMultiNode() && lookupEnv(base, "GLOO_SOCKET_IFNAME") == "":
 		env = append(env, "GLOO_SOCKET_IFNAME="+iface)
 	}
 	return env
 }
+
+func (s Spec) isMultiNode() bool  { return s.Nodes > 1 }
+func (s Spec) usesTorchrun() bool { return s.LocalRanks > 1 || s.isMultiNode() }
 
 // DefaultThreadsPerRank matches torchrun's default. On the reference 12-core host more intra-op
 // threads were 5-10% slower for small models and at most ~7% faster at hidden=4096.
@@ -94,14 +110,15 @@ func ResolveThreadsPerRank(configured int, ompEnv string) int {
 	return DefaultThreadsPerRank
 }
 
-// Run starts the runtime and supervises it until it exits or ctx is cancelled. A multi-rank
-// launch whose rendezvous port was taken before torchrun bound it is retried on a new port.
+// Run starts the runtime and supervises it until it exits or ctx is cancelled. A single-host
+// multi-rank launch whose rendezvous port was taken before torchrun bound it is retried on a new
+// port; multi-machine jobs use the coordinator's port as given.
 func Run(ctx context.Context, s Spec, base []string, goos string) error {
 	grace := s.GracePeriod
 	if grace <= 0 {
 		grace = DefaultGracePeriod
 	}
-	if s.LocalRanks <= 1 {
+	if !s.usesTorchrun() || s.isMultiNode() {
 		return supervise(ctx, s.command(base, goos, s.Stderr), grace)
 	}
 
@@ -128,11 +145,12 @@ func (s Spec) command(base []string, goos string, stderr io.Writer) *exec.Cmd {
 	cmd.Stdout = s.Stdout
 	cmd.Stderr = stderr
 	cmd.Env = s.Env(base, goos)
+	cmd.Dir = s.WorkDir
 	return cmd
 }
 
 func freeLoopbackPort() (int, error) {
-	listener, err := net.Listen("tcp", masterAddr+":0")
+	listener, err := net.Listen("tcp", loopbackAddr+":0")
 	if err != nil {
 		return 0, fmt.Errorf("selecting rendezvous port: %w", err)
 	}

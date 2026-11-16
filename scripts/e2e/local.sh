@@ -109,12 +109,12 @@ fi
 grep -q CHECKPOINT_INVALID "$WORK/v1.log" || fail "v1 rejection did not report CHECKPOINT_INVALID"
 log "ok: v1 checkpoint rejected"
 
-log "rejects workers > 1 until the multi-machine launcher exists"
+log "rejects workers > 1 without --coordinator"
 sed 's/workers: 1/workers: 2/' "$WORK/config.yaml" >"$WORK/multi.yaml"
 if "$CLI" run --config "$WORK/multi.yaml" >"$WORK/multi.log" 2>&1; then
   fail "workers: 2 was accepted"
 fi
-grep -q "multi-machine execution is not yet implemented" "$WORK/multi.log" || fail "wrong rejection message"
-log "ok: workers > 1 rejected"
+grep -q "runs across machines: start meshd" "$WORK/multi.log" || fail "wrong rejection message"
+log "ok: workers > 1 without --coordinator rejected"
 
 log "PASS"

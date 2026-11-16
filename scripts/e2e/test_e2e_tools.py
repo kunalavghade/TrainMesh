@@ -51,6 +51,7 @@ def test_render_splits_global_batch_and_enables_validation() -> None:
 
     assert config["training"]["batch"]["per_rank"] == 32
     assert config["execution"]["processes_per_worker"] == 4
+    assert config["execution"]["workers"] == 2
     assert config["training"]["dataset"]["type"] == "teacher"
     assert config["training"]["validation"]["samples"] == 4096
     assert config["training"]["checkpoint"]["enabled"] is False

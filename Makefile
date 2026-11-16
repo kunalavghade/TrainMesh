@@ -1,7 +1,10 @@
-.PHONY: build generate test test-go test-python lint fmt demo e2e-local e2e-minikube e2e-minikube-down
+.PHONY: build generate test test-go test-python lint fmt demo e2e-local e2e-mesh-local e2e-minikube e2e-minikube-mesh e2e-minikube-down
 
+# trainmesh CLI, meshd coordinator and tm-agent.
 build:
 	go build -o bin/trainmesh ./cmd/trainmesh
+	go build -o bin/meshd ./cmd/meshd
+	go build -o bin/tm-agent ./cmd/tm-agent
 
 # Regenerate Go and Python code from proto/ (needs buf, protoc, protoc-gen-go; see docs/CPU_BACKEND.md).
 generate:
@@ -40,3 +43,11 @@ e2e-minikube:
 
 e2e-minikube-down:
 	scripts/e2e/minikube.sh down
+
+# Phase 1 on one machine: meshd + 2 tm-agents, a job through `trainmesh run --coordinator`, failover.
+e2e-mesh-local:
+	scripts/e2e/mesh-local.sh
+
+# Phase 1 on minikube: meshd + one tm-agent pod per node (needs the cluster from e2e-minikube).
+e2e-minikube-mesh:
+	scripts/e2e/minikube.sh mesh
