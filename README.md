@@ -42,6 +42,8 @@ Remote workers are deliberately reported as unsupported until the authenticated 
 ## Docs
 
 - [Architecture review and target design](docs/TRAINMESH_ARCHITECTURE.md) (start here)
+- [End-to-end and multi-machine testing](docs/E2E_TESTING.md)
+- [Next steps (handoff)](docs/NEXT_STEPS.md)
 - [CPU backend setup](docs/CPU_BACKEND.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Manual integration test](docs/MULTI_MACHINE_MANUAL_TEST.md)
