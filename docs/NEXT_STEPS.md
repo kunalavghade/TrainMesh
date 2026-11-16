@@ -73,12 +73,12 @@ History was rewritten on 2026-11-16 so every commit is authored by `kunalavghade
 address); do not reintroduce the work email or any AI attribution.
 
 - `main` = `8ff4ef5` (pushed).
-- `feat/p0-jobspec` → PR [kunalavghade/TrainMesh#2](https://github.com/kunalavghade/TrainMesh/pull/2):
-  Phase 0 (e2e tooling, single schema, proof of learning, module docs). Auto-fix is on.
+- `feat/p0-jobspec` → PR [kunalavghade/TrainMesh#4](https://github.com/kunalavghade/TrainMesh/pull/4) (replaces #2, which GitHub auto-closed during the history rewrite):
+  Phase 0 (e2e tooling, single schema, proof of learning, module docs).
 - `feat/p1-lan-mesh` (based on `feat/p0-jobspec`) → its own PR: Phase 1 (coordinator, agents,
-  mTLS, CLI mesh commands, mesh e2e). Merge it **after** PR #2; then rebase it onto `main`
+  mTLS, CLI mesh commands, mesh e2e). Merge it **after** PR #4; then rebase it onto `main`
   (`git rebase --onto main feat/p0-jobspec feat/p1-lan-mesh`).
-- `feat/e2e-multinode` (local only) is contained in `feat/p0-jobspec`; delete it once PR #2 merges.
+- `feat/e2e-multinode` (local only) is contained in `feat/p0-jobspec`; delete it once PR #4 merges.
 - `gh`'s active account is `kunalavghade`; if a `gh` call is refused, check `gh auth status`.
 
 ### Done (do not redo)
