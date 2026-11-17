@@ -1,0 +1,27 @@
+[package]
+name = "tmcomm"
+version = "0.5.0"
+description = "TrainMesh inter-island communication: compressed outer all-reduce over mTLS"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "tmcomm"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Builds the Python extension module (maturin enables it; plain `cargo test` does not).
+python = ["dep:pyo3"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py311"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+rustls-pki-types = { version = "1.10", features = ["std"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
+thiserror = "2"
+tokio = { version = "1.40", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
+
+[dev-dependencies]
+rcgen = "0.13"

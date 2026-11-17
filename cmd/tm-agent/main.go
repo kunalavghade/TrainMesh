@@ -54,7 +54,7 @@ func run(stateDir, join, address, iface, device string, logger *slog.Logger) err
 	if err != nil {
 		return err
 	}
-	runner := &agent.TorchRunner{Runtime: rt, JobsDir: filepath.Join(stateDir, "jobs")}
+	runner := &agent.TorchRunner{Runtime: rt, JobsDir: filepath.Join(stateDir, "jobs"), TLS: agent.NodeTLSFiles(stateDir)}
 	a, err := agent.New(agent.Config{
 		StateDir:   stateDir,
 		JoinString: join,
@@ -72,7 +72,7 @@ func run(stateDir, join, address, iface, device string, logger *slog.Logger) err
 	if err := a.Start(ctx); err != nil {
 		return err
 	}
-	runner.Interface, runner.Device = a.Interface(), a.Device()
+	runner.Interface, runner.Device, runner.Address = a.Interface(), a.Device(), a.Address()
 	err = a.Run(ctx)
 	if errors.Is(err, context.Canceled) {
 		return nil

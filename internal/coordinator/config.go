@@ -20,8 +20,10 @@ type Config struct {
 	Liveness membership.LivenessPolicy
 	// How often the coordinator re-evaluates liveness.
 	SweepInterval time.Duration
-	// TCP port node rank 0 uses for torchrun's static rendezvous.
+	// TCP port node rank 0 uses for torchrun's static rendezvous (island k: + k).
 	RendezvousPort int
+	// TCP port a diloco island leader's tmcomm listens on (island k: + k).
+	TmcommPort int
 	// Default join token lifetime and certificate lifetime for nodes.
 	TokenTTL         time.Duration
 	NodeCertValidity time.Duration
@@ -36,6 +38,7 @@ const (
 	DefaultLostAfter         = 20 * time.Second
 	DefaultSweepInterval     = time.Second
 	DefaultRendezvousPort    = 29500
+	DefaultTmcommPort        = 29700
 	DefaultTokenTTL          = 15 * time.Minute
 	DefaultNodeCertValidity  = 30 * 24 * time.Hour
 )
@@ -56,6 +59,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.RendezvousPort == 0 {
 		c.RendezvousPort = DefaultRendezvousPort
+	}
+	if c.TmcommPort == 0 {
+		c.TmcommPort = DefaultTmcommPort
 	}
 	if c.TokenTTL == 0 {
 		c.TokenTTL = DefaultTokenTTL
@@ -83,6 +89,9 @@ func (c Config) Validate() error {
 	}
 	if c.RendezvousPort <= 0 || c.RendezvousPort > 65535 {
 		problems = append(problems, fmt.Errorf("rendezvous port %d out of range", c.RendezvousPort))
+	}
+	if c.TmcommPort <= 0 || c.TmcommPort > 65535 {
+		problems = append(problems, fmt.Errorf("tmcomm port %d out of range", c.TmcommPort))
 	}
 	return errors.Join(problems...)
 }

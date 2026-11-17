@@ -88,9 +88,10 @@ func (s JobState) Terminal() bool {
 	return s == JobSucceeded || s == JobFailed || s == JobCancelled
 }
 
-// Assignment is one node's part of a job.
+// Assignment is one node's part of a job. NodeRank counts within the node's island.
 type Assignment struct {
 	NodeID   string   `json:"node_id"`
+	Island   int      `json:"island,omitempty"`
 	NodeRank int      `json:"node_rank"`
 	State    JobState `json:"state"`
 	Message  string   `json:"message,omitempty"`
@@ -107,11 +108,37 @@ type Job struct {
 	MasterPort      int             `json:"master_port,omitempty"`
 	Communication   string          `json:"communication,omitempty"`
 	RankBatchSizes  []int           `json:"rank_batch_sizes,omitempty"`
+	Strategy        string          `json:"strategy,omitempty"`
+	Islands         []Island        `json:"islands,omitempty"`
+	MinIslands      int             `json:"min_islands,omitempty"`
+	ResultIsland    int             `json:"result_island,omitempty"`
 	Assignments     []Assignment    `json:"assignments,omitempty"`
 	Result          json.RawMessage `json:"result,omitempty"`
 	Error           string          `json:"error,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	FinishedAt      time.Time       `json:"finished_at,omitempty"`
+}
+
+// Island is a group of machines that run one torchrun world. A data_parallel job has one; a
+// diloco job has one per machines_per_island machines, joined by tmcomm between their leaders.
+type Island struct {
+	Index         int      `json:"index"`
+	NodeIDs       []string `json:"node_ids"`
+	MasterAddr    string   `json:"master_addr"`
+	MasterPort    int      `json:"master_port"`
+	TmcommAddress string   `json:"tmcomm_address,omitempty"`
+	TmcommPort    int      `json:"tmcomm_port,omitempty"`
+}
+
+// IslandCount is at least 1 (jobs stored before islands existed have none recorded).
+func (j *Job) IslandCount() int { return max(1, len(j.Islands)) }
+
+// RequiredIslands is how many islands must finish; all of them unless MinIslands says less.
+func (j *Job) RequiredIslands() int {
+	if j.MinIslands > 0 {
+		return j.MinIslands
+	}
+	return j.IslandCount()
 }
 
 // AssignmentFor returns the node's assignment in this job.

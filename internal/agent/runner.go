@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 
 	"github.com/trainmesh/trainmesh/internal/config"
 	"github.com/trainmesh/trainmesh/internal/launcher"
@@ -19,7 +22,8 @@ const (
 	jobLogFile    = "runtime.log"
 )
 
-// Assignment is this machine's part of a job, as sent by the coordinator.
+// Assignment is this machine's part of a job, as sent by the coordinator. For a diloco job,
+// NodeRank, Machines and Master* describe this node's island.
 type Assignment struct {
 	JobID           string
 	NodeRank        int
@@ -28,6 +32,21 @@ type Assignment struct {
 	MasterAddr      string
 	MasterPort      int
 	ConfigYAML      []byte
+	Island          int
+	IslandPeers     []IslandPeer
+	TmcommPort      int
+}
+
+// IslandPeer is one island leader's tmcomm endpoint.
+type IslandPeer struct {
+	Island  int    `json:"island"`
+	Address string `json:"address"`
+	Name    string `json:"name"`
+}
+
+// TLSFiles are the node identity files tmcomm uses for mTLS between island leaders.
+type TLSFiles struct {
+	Cert, Key, CA string
 }
 
 // Runner executes an assignment and returns rank 0's result JSON (nil on other nodes).
@@ -41,10 +60,20 @@ type TorchRunner struct {
 	JobsDir   string
 	Interface string // NIC for Gloo; set from route detection
 	Device    string // device offered to the mesh; used by jobs that ask for device=auto
+	Address   string // advertised IP; an island leader's tmcomm listens on it
+	TLS       TLSFiles
 }
 
-// deviceEnv tells the runtime which device `device: auto` means on this machine.
-const deviceEnv = "TRAINMESH_DEVICE"
+// Environment the runtime reads (see trainmesh_runtime/devices.py and diloco.py).
+const (
+	deviceEnv      = "TRAINMESH_DEVICE"
+	islandEnv      = "TRAINMESH_ISLAND"
+	islandPeersEnv = "TRAINMESH_ISLAND_PEERS"
+	tmcommListen   = "TRAINMESH_TMCOMM_LISTEN"
+	tlsCertEnv     = "TRAINMESH_TLS_CERT"
+	tlsKeyEnv      = "TRAINMESH_TLS_KEY"
+	tlsCAEnv       = "TRAINMESH_TLS_CA"
+)
 
 // Run writes the config, launches this node's ranks and waits. Output goes to runtime.log.
 func (r TorchRunner) Run(ctx context.Context, a Assignment) ([]byte, error) {
@@ -83,9 +112,9 @@ func (r TorchRunner) Run(ctx context.Context, a Assignment) ([]byte, error) {
 		Stdout:         logFile,
 		Stderr:         logFile,
 	}
-	env := os.Environ()
-	if r.Device != "" {
-		env = append(env, deviceEnv+"="+r.Device)
+	env, err := r.environment(a)
+	if err != nil {
+		return nil, err
 	}
 	if err := launcher.Run(ctx, spec, env, runtime.GOOS); err != nil {
 		return nil, fmt.Errorf("%w (log: %s)", err, logFile.Name())
@@ -98,4 +127,35 @@ func (r TorchRunner) Run(ctx context.Context, a Assignment) ([]byte, error) {
 		return nil, fmt.Errorf("rank 0 finished without writing %s", resultPath)
 	}
 	return result, err
+}
+
+// environment is the agent's environment plus what this assignment tells the runtime.
+func (r TorchRunner) environment(a Assignment) ([]string, error) {
+	env := os.Environ()
+	if r.Device != "" {
+		env = append(env, deviceEnv+"="+r.Device)
+	}
+	if len(a.IslandPeers) == 0 {
+		return env, nil
+	}
+	peers, err := json.Marshal(a.IslandPeers)
+	if err != nil {
+		return nil, fmt.Errorf("encoding island peers: %w", err)
+	}
+	env = append(env,
+		islandEnv+"="+strconv.Itoa(a.Island),
+		islandPeersEnv+"="+string(peers),
+		tmcommListen+"="+net.JoinHostPort(r.listenHost(), strconv.Itoa(a.TmcommPort)),
+	)
+	if r.TLS.Cert != "" {
+		env = append(env, tlsCertEnv+"="+r.TLS.Cert, tlsKeyEnv+"="+r.TLS.Key, tlsCAEnv+"="+r.TLS.CA)
+	}
+	return env, nil
+}
+
+func (r TorchRunner) listenHost() string {
+	if r.Address != "" {
+		return r.Address
+	}
+	return "0.0.0.0"
 }

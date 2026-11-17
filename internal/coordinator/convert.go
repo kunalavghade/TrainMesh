@@ -76,13 +76,26 @@ func jobToProto(j store.Job) *trainmeshv1.Job {
 		CreatedAt:       timestamp(j.CreatedAt),
 		FinishedAt:      timestamp(j.FinishedAt),
 		Communication:   j.Communication,
+		Strategy:        j.Strategy,
+		MinIslands:      toInt32(j.RequiredIslands()),
+	}
+	states := islandStates(&j)
+	for _, island := range j.Islands {
+		job.Islands = append(job.Islands, &trainmeshv1.JobIsland{
+			Index:         toInt32(island.Index),
+			MasterAddr:    island.MasterAddr,
+			MasterPort:    toInt32(island.MasterPort),
+			NodeIds:       island.NodeIDs,
+			TmcommAddress: island.TmcommAddress,
+			State:         states[island.Index].String(),
+		})
 	}
 	for _, size := range j.RankBatchSizes {
 		job.RankBatchSizes = append(job.RankBatchSizes, toInt32(size))
 	}
 	for _, a := range j.Assignments {
 		job.Assignments = append(job.Assignments, &trainmeshv1.Assignment{
-			NodeId: a.NodeID, NodeRank: toInt32(a.NodeRank), State: string(a.State), Message: a.Message,
+			NodeId: a.NodeID, Island: toInt32(a.Island), NodeRank: toInt32(a.NodeRank), State: string(a.State), Message: a.Message,
 		})
 	}
 	return job

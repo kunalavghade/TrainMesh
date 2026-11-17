@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tmcomm"
+version = "0.5.0"
+description = "TrainMesh inter-island communication (Rust extension)"
+requires-python = ">=3.11"
+
+[tool.maturin]
+features = ["python"]
+module-name = "tmcomm"

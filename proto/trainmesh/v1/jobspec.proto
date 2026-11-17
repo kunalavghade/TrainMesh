@@ -42,10 +42,23 @@ message Run {
 }
 
 message Execution {
+  option (buf.validate.message).cel = {
+    id: "execution.diloco.islands"
+    message: "execution.workers must be a multiple of execution.diloco.machines_per_island"
+    expression: "this.strategy != 'diloco' || this.workers % (this.diloco.machines_per_island > 1 ? this.diloco.machines_per_island : 1) == 0"
+  };
+  option (buf.validate.message).cel = {
+    id: "execution.diloco.min_islands"
+    message: "execution.diloco.min_islands cannot exceed the number of islands (workers / machines_per_island)"
+    expression: "this.strategy != 'diloco' || this.diloco.min_islands <= this.workers / (this.diloco.machines_per_island > 1 ? this.diloco.machines_per_island : 1)"
+  };
+  // data_parallel: every rank synchronises gradients every step (DDP or all-reduce).
+  // diloco: ranks synchronise every step only inside their island; island leaders average
+  // pseudo-gradients every diloco.inner_steps steps through tmcomm (made for slow links).
   string strategy = 1 [(buf.validate.field).cel = {
     id: "execution.strategy"
-    message: "only execution.strategy=data_parallel is implemented"
-    expression: "this == 'data_parallel'"
+    message: "execution.strategy must be data_parallel or diloco"
+    expression: "this in ['data_parallel', 'diloco']"
   }];
   // Machines in the job. The CLI can launch only 1 until the Phase 1 agent exists.
   int32 workers = 2 [(buf.validate.field).int32.gte = 1];
@@ -63,6 +76,34 @@ message Execution {
     message: "execution.gradient_sync must be auto, ddp or allreduce"
     expression: "this in ['', 'auto', 'ddp', 'allreduce']"
   }];
+  // Settings of strategy=diloco; ignored otherwise.
+  Diloco diloco = 8;
+}
+
+// DiLoCo (Douillard et al., 2023): islands train independently for inner_steps optimizer steps,
+// then average their pseudo-gradients (start-of-round weights minus current weights) and apply
+// them with an outer Nesterov-momentum SGD step. Traffic between islands drops by inner_steps x
+// compared with per-step synchronisation, and by a further 4x with int8 compression.
+message Diloco {
+  // Inner optimizer steps per outer round (H). 0 means 100.
+  int32 inner_steps = 1 [(buf.validate.field).int32.gte = 0];
+  // Outer SGD learning rate. Unset means 0.7 (the DiLoCo paper's value).
+  optional double outer_learning_rate = 2 [(buf.validate.field).double = {gt: 0, lte: 10}];
+  // Outer Nesterov momentum. Unset means 0.9.
+  optional double outer_momentum = 3 [(buf.validate.field).double = {gte: 0, lt: 1}];
+  // Pseudo-gradient encoding between islands: none (fp32), bf16 or int8. Empty means int8.
+  // bf16 and int8 use error feedback, so what is dropped in one round is sent in the next.
+  string compression = 4 [(buf.validate.field).cel = {
+    id: "execution.diloco.compression"
+    message: "execution.diloco.compression must be none, bf16 or int8"
+    expression: "this in ['', 'none', 'bf16', 'int8']"
+  }];
+  // Machines that form one island (synchronised every step over a fast link). 0 means 1.
+  int32 machines_per_island = 5 [(buf.validate.field).int32.gte = 0];
+  // Islands that must contribute to every round for training to continue. 0 means a majority.
+  int32 min_islands = 6 [(buf.validate.field).int32.gte = 0];
+  // How long the root waits for every island's contribution. 0 means 120 s.
+  double round_timeout_seconds = 7 [(buf.validate.field).double.gte = 0];
 }
 
 message Backend {

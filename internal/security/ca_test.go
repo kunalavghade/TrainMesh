@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -120,5 +121,26 @@ func TestNodeCertificateCannotImpersonateServer(t *testing.T) {
 
 	if _, err := handshake(t, impostor, ClientTLS(ca.Cert, nil, nil)); err == nil {
 		t.Fatal("a node (client-auth) certificate was accepted as a server")
+	}
+}
+
+func TestNodeCertificateNamesTheNodeForPeerTLS(t *testing.T) {
+	ca, _ := NewCA(time.Now(), testValidity)
+	nodeDER, _, err := ca.IssueClient("node-1", RoleNode, time.Now(), testValidity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, _ := x509.ParseCertificate(nodeDER)
+	if !slices.Equal(node.DNSNames, []string{"node-1"}) {
+		t.Errorf("node DNS names = %v, want [node-1] (tmcomm dials leaders by node ID)", node.DNSNames)
+	}
+	if !slices.Contains(node.ExtKeyUsage, x509.ExtKeyUsageServerAuth) || !slices.Contains(node.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		t.Errorf("node key usages = %v, want server and client auth", node.ExtKeyUsage)
+	}
+
+	adminDER, _, _ := ca.IssueClient("admin", RoleAdmin, time.Now(), testValidity)
+	admin, _ := x509.ParseCertificate(adminDER)
+	if len(admin.DNSNames) != 0 || slices.Contains(admin.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+		t.Errorf("admin certificates must stay client-only: %v %v", admin.DNSNames, admin.ExtKeyUsage)
 	}
 }

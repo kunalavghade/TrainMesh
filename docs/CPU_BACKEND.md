@@ -1,13 +1,14 @@
 # CPU backend setup
 
-TrainMesh uses PyTorch DistributedDataParallel with the Gloo backend. CUDA and NCCL are intentionally not required or advertised.
+TrainMesh trains on CPU with PyTorch and Gloo out of the box; Apple MPS and CUDA are selected with `execution.backend.device` (see [modules/devices.md](modules/devices.md)). DiLoCo jobs also need the `tmcomm` Rust extension (`make native`).
 
 ## macOS setup (Apple Silicon or Intel)
 
 ```bash
 uv venv .venv
-uv pip install --python .venv/bin/python -e 'python[test]'
-go build -o bin/trainmesh ./cmd/trainmesh
+uv pip install --python .venv/bin/python -e 'python[dev]'
+make build    # trainmesh, meshd, tm-agent into bin/
+make native   # only for strategy: diloco; needs Rust (rustup) — builds tmcomm into .venv
 ./bin/trainmesh doctor
 ```
 
@@ -37,6 +38,23 @@ Format v2 writes these files, and nothing is pickled:
 
 Resume checks every hash, the world size and the training shape before loading anything. Old v1 `checkpoint.pt` files are refused, because loading them would unpickle arbitrary objects.
 
+## Changes in 0.5
+
+- New `execution.strategy: diloco` with `execution.diloco` settings ([modules/diloco.md](modules/diloco.md)).
+- Node certificates now name the node (DNS SAN) and allow server auth, for tmcomm between island
+  leaders. **Agents that joined with 0.4 or earlier must join again** (new token) before they can
+  run diloco jobs; data-parallel jobs keep working. Clients now also require `meshd`'s certificate
+  to be the coordinator's (CN `meshd`, no member role).
+- Results add `strategy`, `compute_utilization` and `diloco`.
+- Data-parallel jobs that do not divide `samples` by the global batch drop the incomplete final
+  batch (since 0.4).
+
+## Changes in 0.4
+
+- Devices `mps`, `cuda`, `auto`; precisions `bf16`, `fp16`, `auto`; `execution.gradient_sync`;
+  `training.batch.balance` and `rank_batch_sizes` ([modules/devices.md](modules/devices.md)).
+- `tm-agent --device`; agents benchmark their devices at start.
+
 ## Config changes in 0.3
 
 - One schema for Go and Python with the same validation messages; unknown keys are now errors.
@@ -54,10 +72,11 @@ Resume checks every hash, the world size and the training shape before loading a
 
 The full schema and its rules are in `proto/trainmesh/v1/jobspec.proto` (explained in
 [modules/config.md](modules/config.md)); the CLI and the runtime both reject anything outside it,
-with the same messages. Supported today: version 1, `data_parallel`, `cpu` + `gloo`, MLP models,
-the `synthetic` (random labels, throughput) and `teacher` (learnable, for accuracy) datasets,
-optional held-out validation (`training.validation.samples`), FP32, Adam or SGD. CUDA/NCCL, other
-precisions and CLI-launched multi-machine jobs are rejected. See `examples/cpu-ddp.yaml`.
+with the same messages. Supported today: version 1, `data_parallel` and `diloco`, devices
+`cpu`/`mps`/`cuda`/`auto` with `gloo`/`nccl`, MLP models, the `synthetic` (random labels,
+throughput) and `teacher` (learnable, for accuracy) datasets, optional held-out validation
+(`training.validation.samples`), fp32/bf16/fp16, Adam or SGD. Multi-machine jobs run through
+`meshd` (`trainmesh run --coordinator`). See `examples/cpu-ddp.yaml`.
 
 ## Developer toolchain (only to change the schema)
 

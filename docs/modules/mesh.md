@@ -134,16 +134,21 @@ Re-submit with `run.resume` once the cluster is healthy (automatic recovery is P
   (`ca.pem`, `ca-key.pem` in its state dir, key 0600).
 - `meshd` issues itself a server certificate for the advertise host plus localhost on every
   start, and an admin client certificate once (`admin.pem`, `admin-key.pem`) for the CLI.
-- Clients trust a server only if its chain reaches the cluster CA **and** it has the
-  server-auth usage. A node's client certificate therefore cannot impersonate the coordinator
-  (tested). Host names are not checked, because machine addresses change; the CA is the trust
-  anchor.
+- Clients trust a server only if its chain reaches the cluster CA, it has the server-auth
+  usage **and** it is the coordinator's certificate (CN `meshd`, no member role). Host names are
+  not checked, because machine addresses change; the CA is the trust anchor.
+- Node certificates name the node ID as a DNS name and allow both client and server auth (since
+  0.5), so DiLoCo island leaders can authenticate each other over tmcomm
+  ([tmcomm.md](tmcomm.md)). The coordinator-identity check above is what still stops a node
+  certificate from impersonating `meshd` (tested). Agents that joined before 0.5 must join again
+  to run diloco jobs.
 - **Authorization** is one table (`methodRoles` in `internal/coordinator/auth.go`): `Join` is
   anonymous; `Heartbeat` and `ReportAssignment` need a node certificate; everything else needs
   the admin certificate. A method missing from the table is denied.
 - A node can only report on its own assignments (checked against its certificate's CN).
 - Not yet: certificate renewal (node certificates last 30 days), token revocation and node
-  removal commands, and authentication of torchrun/Gloo traffic. Run on a trusted network.
+  removal commands, and authentication of torchrun/Gloo traffic inside an island. Traffic
+  between islands (tmcomm) is mTLS.
 
 ## Operating it
 
@@ -162,9 +167,16 @@ trainmesh job get <job-id>  |  trainmesh job cancel <job-id>
 ```
 
 `TRAINMESH_COORDINATOR` and `TRAINMESH_ADMIN_DIR` set the defaults for `--coordinator` and
-`--admin-dir`. Every machine needs the same TrainMesh commit and PyTorch version. TCP must be
-open from every machine to `meshd` (7443) and to node rank 0's rendezvous port, plus between
-machines for Gloo.
+`--admin-dir`. Every machine needs the same TrainMesh commit and PyTorch version (and the
+`tmcomm` extension, `make native`, for diloco jobs). TCP must be open from every machine to
+`meshd` (7443) and to its island's rendezvous port (`--rendezvous-port` + island), between the
+machines of an island for Gloo, and between island leaders on `--tmcomm-port` + island
+(default 29700 + island).
+
+**Islands.** Every job has islands: a data-parallel job is one island that must finish; a diloco
+job has `workers / machines_per_island` islands, each its own torchrun world, of which
+`min_islands` must finish. A failed machine fails only its island; the job fails when too few
+islands remain. See [diloco.md](diloco.md).
 
 ## Tests
 
@@ -173,6 +185,7 @@ machines for Gloo.
   round trips and rollback).
 - `internal/coordinator/server_test.go`: deterministic scheduler and job-settlement tests.
 - `internal/coordinator/planner_test.go`: device filter, group-wide backend, batch split.
+- `internal/coordinator/islands_test.go`: islands, ports, quorum settlement, island cancel.
 - `internal/coordinator/mesh_test.go`: real `meshd` + real agents over mTLS in-process (fake
   training runner): join and run, single-use tokens, wrong CA, role checks, failure
   cancellation, a silent node going LOST, not enough nodes.

@@ -25,8 +25,10 @@ run:
   seed: 42
   results_path: "{results_path}"
 execution:
-  strategy: data_parallel
+  strategy: {strategy}
   backend: {{device: {device}, communication: {communication}}}
+  gradient_sync: {gradient_sync}
+  diloco: {{inner_steps: {inner_steps}, compression: {compression}, min_islands: {min_islands}}}
   workers: {machines}
   processes_per_worker: {ranks_per_machine}
 training:
@@ -77,6 +79,11 @@ def render(args: argparse.Namespace) -> str:
         device=args.device,
         communication=args.communication,
         balance=args.balance,
+        strategy=args.strategy,
+        inner_steps=args.inner_steps,
+        compression=args.compression,
+        min_islands=args.min_islands,
+        gradient_sync=args.gradient_sync,
     )
 
 
@@ -97,6 +104,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--results-path", default="", help="rank 0 writes its result JSON here")
     parser.add_argument("--device", choices=["cpu", "mps", "cuda", "auto"], default="cpu")
     parser.add_argument("--communication", choices=["gloo", "nccl", "auto"], default="gloo")
+    parser.add_argument("--strategy", choices=["data_parallel", "diloco"], default="data_parallel")
+    parser.add_argument("--inner-steps", type=int, default=0, help="diloco: steps per round")
+    parser.add_argument("--compression", choices=["none", "bf16", "int8"], default="int8")
+    parser.add_argument("--min-islands", type=int, default=0, help="diloco: 0 = majority")
+    parser.add_argument(
+        "--gradient-sync",
+        choices=["auto", "ddp", "allreduce"],
+        default="auto",
+        help="allreduce makes communication time measurable (DDP hides it in backward)",
+    )
     parser.add_argument(
         "--balance",
         choices=["uniform", "throughput"],

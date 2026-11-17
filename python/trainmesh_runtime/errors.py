@@ -25,3 +25,9 @@ class DivergenceError(TrainMeshError, RuntimeError):
     """Replicas that must hold identical parameters do not."""
 
     code = "REPLICA_DIVERGENCE"
+
+
+class OuterSyncError(TrainMeshError, RuntimeError):
+    """The DiLoCo exchange between islands failed (quorum lost, divergence, excluded)."""
+
+    code = "OUTER_SYNC_FAILED"

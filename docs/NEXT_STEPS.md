@@ -63,6 +63,8 @@ make generate     # regenerate Go/Python code from proto/ after editing jobspec.
 make e2e-local    # real CLI end to end on this machine, incl. learning check (~1 min)
 make e2e-mesh-local     # meshd + 2 agents on this machine
 make e2e-devices-local  # mps agent + cpu agent, uniform vs throughput balance (Apple Silicon)
+make native             # build the tmcomm Rust extension into .venv (needed for diloco)
+make e2e-wan            # DiLoCo vs data_parallel over tc netem in Docker, root island killed
 make e2e-minikube # 2-node minikube cluster: 1 vs 2 machine comparison (slow, needs Docker)
 ./bin/trainmesh run --config examples/cpu-ddp.yaml   # real 2-rank CPU training
 ```
@@ -79,8 +81,10 @@ History was rewritten on 2026-11-16 so every commit is authored by `kunalavghade
 address); do not reintroduce the work email or any AI attribution.
 
 - `main` has Phase 0 (PR #4) and Phase 1 (PR #3).
-- `feat/p2-devices` → its own PR: Phase 2 (devices, mixed-device sync, profiles, planner,
-  throughput balancing, devices e2e). Stop for the user's review before starting Phase 3.
+- `feat/p2-devices` → PR #5: Phase 2 (devices, mixed-device sync, profiles, planner,
+  throughput balancing, devices e2e).
+- `feat/p3-diloco` (based on `feat/p2-devices`) → its own PR: Phase 3 (tmcomm, DiLoCo, islands,
+  WAN e2e). After PR #5 merges, rebase it onto `main`. Stop for the user's review before Phase 4.
 - `gh`'s active account is `kunalavghade`; if a `gh` call is refused, check `gh auth status`.
 
 ### Done (do not redo)
@@ -96,6 +100,11 @@ in `docs/modules/`.
 Phase 1 is implemented and verified on one Mac and on minikube (see §10 status and
 `docs/modules/mesh.md`): `meshd`, `tm-agent`, tokens, CA + mTLS, liveness, scheduling,
 `trainmesh run --coordinator`, failure propagation.
+
+Phase 3 is implemented and verified over an emulated WAN (see §10 status,
+`docs/modules/diloco.md`, `docs/modules/tmcomm.md`): Rust `tmcomm` (int8 + error feedback, mTLS,
+quorum, root failover), DiLoCo islands in runtime and coordinator, `scripts/e2e/wan.sh`.
+Build the extension with `make native` (needs Rust); `make test` also runs `cargo test`.
 
 Phase 2 is implemented for CPU and Apple MPS (see §10 status and `docs/modules/devices.md`):
 device/precision selection, group-wide gradient sync (DDP or staged all-reduce), agent device
@@ -216,13 +225,23 @@ regenerate with `make generate`; update `docs/modules/mesh.md`.
 | 5.3 | **Heterogeneous physical run**: a GPU or Apple machine plus a CPU box | `balance: throughput` ends with step imbalance ≤ 1.10 and a higher samples/s than `balance: uniform`; record both in `docs/E2E_TESTING.md` |
 | 5.4 | Optional: several ranks on one GPU | Weight ranks by node throughput / ranks per node, or measure per rank; test in `planner_test.go` |
 
-## Task 6 — Phase 3 (`tmcomm` + DiLoCo across islands)
+## Task 6 — Phase 3 leftovers
 
-Start only after the user reviews Phase 2. Read architecture §5.2, §5.5, §5.7–5.8, §7 and §10
-(P3). Level 1c showed why it matters: on loopback, ~3 s of a 4.7 s run is the per-step
-all-reduce. Suggested order (ask the user first): DiLoCo outer loop in Python over Gloo (fewer,
-larger syncs; measurable now) → Rust `tmcomm` crate with QUIC transport and int8 compression →
-`ProcessGroupTM` → `tc netem` WAN e2e.
+Phase 3 is built (see §10 status, `docs/modules/diloco.md`, `docs/modules/tmcomm.md`). Left:
+
+| # | Item | Done when |
+|---|------|-----------|
+| 6.1 | **Real WAN run** (ask the user): islands on two networks | A diloco job across the internet (port-forwarded tmcomm/rendezvous ports) matches level 4's checks; numbers recorded in `docs/E2E_TESTING.md` |
+| 6.2 | NAT traversal + relay | Leaders behind NAT reach each other (coordinator-assisted hole punching, relay fallback); e2e with two Docker networks |
+| 6.3 | QUIC transport (quinn) in tmcomm | Same tests pass over QUIC; head-of-line blocking measured under netem loss |
+| 6.4 | Heterogeneous islands | Per-island H or asynchronous rounds so a slow island does not stall the others; test with one throttled island |
+| 6.5 | Checkpoint the outer state | `run.resume` works for diloco (anchor + outer momentum saved with the checkpoint) |
+
+## Task 7 — Phase 4 (large models: FSDP inside islands, pipeline, LoRA)
+
+Start only after the user reviews Phase 3. Read architecture §5.7 and §10 (P4). The dev Mac has
+no NVIDIA GPU, so FSDP/pipeline must be verified on CPU/Gloo with small models first, and the 7B
+LoRA acceptance needs the user's hardware.
 
 ## Reporting template (use after every task)
 

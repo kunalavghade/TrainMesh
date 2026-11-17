@@ -88,7 +88,7 @@ class Directive(_message.Message):
     def __init__(self, start: _Optional[_Union[StartAssignment, _Mapping]] = ..., cancel: _Optional[_Union[CancelAssignment, _Mapping]] = ...) -> None: ...
 
 class StartAssignment(_message.Message):
-    __slots__ = ("job_id", "node_rank", "machines", "ranks_per_machine", "master_addr", "master_port", "config_yaml")
+    __slots__ = ("job_id", "node_rank", "machines", "ranks_per_machine", "master_addr", "master_port", "config_yaml", "island", "island_peers", "tmcomm_port")
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_RANK_FIELD_NUMBER: _ClassVar[int]
     MACHINES_FIELD_NUMBER: _ClassVar[int]
@@ -96,6 +96,9 @@ class StartAssignment(_message.Message):
     MASTER_ADDR_FIELD_NUMBER: _ClassVar[int]
     MASTER_PORT_FIELD_NUMBER: _ClassVar[int]
     CONFIG_YAML_FIELD_NUMBER: _ClassVar[int]
+    ISLAND_FIELD_NUMBER: _ClassVar[int]
+    ISLAND_PEERS_FIELD_NUMBER: _ClassVar[int]
+    TMCOMM_PORT_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     node_rank: int
     machines: int
@@ -103,7 +106,20 @@ class StartAssignment(_message.Message):
     master_addr: str
     master_port: int
     config_yaml: bytes
-    def __init__(self, job_id: _Optional[str] = ..., node_rank: _Optional[int] = ..., machines: _Optional[int] = ..., ranks_per_machine: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., config_yaml: _Optional[bytes] = ...) -> None: ...
+    island: int
+    island_peers: _containers.RepeatedCompositeFieldContainer[IslandPeer]
+    tmcomm_port: int
+    def __init__(self, job_id: _Optional[str] = ..., node_rank: _Optional[int] = ..., machines: _Optional[int] = ..., ranks_per_machine: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., config_yaml: _Optional[bytes] = ..., island: _Optional[int] = ..., island_peers: _Optional[_Iterable[_Union[IslandPeer, _Mapping]]] = ..., tmcomm_port: _Optional[int] = ...) -> None: ...
+
+class IslandPeer(_message.Message):
+    __slots__ = ("island", "address", "name")
+    ISLAND_FIELD_NUMBER: _ClassVar[int]
+    ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    island: int
+    address: str
+    name: str
+    def __init__(self, island: _Optional[int] = ..., address: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
 
 class CancelAssignment(_message.Message):
     __slots__ = ("job_id", "reason")
@@ -190,19 +206,21 @@ class SubmitJobResponse(_message.Message):
     def __init__(self, job_id: _Optional[str] = ...) -> None: ...
 
 class Assignment(_message.Message):
-    __slots__ = ("node_id", "node_rank", "state", "message")
+    __slots__ = ("node_id", "node_rank", "state", "message", "island")
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_RANK_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ISLAND_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     node_rank: int
     state: str
     message: str
-    def __init__(self, node_id: _Optional[str] = ..., node_rank: _Optional[int] = ..., state: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+    island: int
+    def __init__(self, node_id: _Optional[str] = ..., node_rank: _Optional[int] = ..., state: _Optional[str] = ..., message: _Optional[str] = ..., island: _Optional[int] = ...) -> None: ...
 
 class Job(_message.Message):
-    __slots__ = ("id", "state", "machines", "ranks_per_machine", "master_addr", "master_port", "assignments", "result_json", "error", "created_at", "finished_at", "rank_batch_sizes", "communication")
+    __slots__ = ("id", "state", "machines", "ranks_per_machine", "master_addr", "master_port", "assignments", "result_json", "error", "created_at", "finished_at", "rank_batch_sizes", "communication", "strategy", "islands", "min_islands")
     ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     MACHINES_FIELD_NUMBER: _ClassVar[int]
@@ -216,6 +234,9 @@ class Job(_message.Message):
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     RANK_BATCH_SIZES_FIELD_NUMBER: _ClassVar[int]
     COMMUNICATION_FIELD_NUMBER: _ClassVar[int]
+    STRATEGY_FIELD_NUMBER: _ClassVar[int]
+    ISLANDS_FIELD_NUMBER: _ClassVar[int]
+    MIN_ISLANDS_FIELD_NUMBER: _ClassVar[int]
     id: str
     state: str
     machines: int
@@ -229,7 +250,26 @@ class Job(_message.Message):
     finished_at: _timestamp_pb2.Timestamp
     rank_batch_sizes: _containers.RepeatedScalarFieldContainer[int]
     communication: str
-    def __init__(self, id: _Optional[str] = ..., state: _Optional[str] = ..., machines: _Optional[int] = ..., ranks_per_machine: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., assignments: _Optional[_Iterable[_Union[Assignment, _Mapping]]] = ..., result_json: _Optional[bytes] = ..., error: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., rank_batch_sizes: _Optional[_Iterable[int]] = ..., communication: _Optional[str] = ...) -> None: ...
+    strategy: str
+    islands: _containers.RepeatedCompositeFieldContainer[JobIsland]
+    min_islands: int
+    def __init__(self, id: _Optional[str] = ..., state: _Optional[str] = ..., machines: _Optional[int] = ..., ranks_per_machine: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., assignments: _Optional[_Iterable[_Union[Assignment, _Mapping]]] = ..., result_json: _Optional[bytes] = ..., error: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., rank_batch_sizes: _Optional[_Iterable[int]] = ..., communication: _Optional[str] = ..., strategy: _Optional[str] = ..., islands: _Optional[_Iterable[_Union[JobIsland, _Mapping]]] = ..., min_islands: _Optional[int] = ...) -> None: ...
+
+class JobIsland(_message.Message):
+    __slots__ = ("index", "master_addr", "master_port", "node_ids", "tmcomm_address", "state")
+    INDEX_FIELD_NUMBER: _ClassVar[int]
+    MASTER_ADDR_FIELD_NUMBER: _ClassVar[int]
+    MASTER_PORT_FIELD_NUMBER: _ClassVar[int]
+    NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    TMCOMM_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    index: int
+    master_addr: str
+    master_port: int
+    node_ids: _containers.RepeatedScalarFieldContainer[str]
+    tmcomm_address: str
+    state: str
+    def __init__(self, index: _Optional[int] = ..., master_addr: _Optional[str] = ..., master_port: _Optional[int] = ..., node_ids: _Optional[_Iterable[str]] = ..., tmcomm_address: _Optional[str] = ..., state: _Optional[str] = ...) -> None: ...
 
 class GetJobRequest(_message.Message):
     __slots__ = ("job_id",)

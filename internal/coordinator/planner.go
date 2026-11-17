@@ -71,7 +71,10 @@ func planJob(spec *trainmeshv1.JobSpec, nodes []store.Node, machines, ranksPerMa
 	}
 
 	planned := plan{nodes: chosen, communication: chooseCommunication(spec, chosen)}
-	if spec.GetTraining().GetBatch().GetBalance() == balanceThrough && len(spec.GetTraining().GetBatch().GetRankBatchSizes()) == 0 {
+	// A diloco island is its own torchrun world, so a split over every machine would not fit
+	// it; the runtime re-splits inside each island from measured step times instead.
+	splitHere := spec.GetExecution().GetStrategy() != strategyDiloco
+	if splitHere && spec.GetTraining().GetBatch().GetBalance() == balanceThrough && len(spec.GetTraining().GetBatch().GetRankBatchSizes()) == 0 {
 		weights, err := rankWeights(chosen, device, ranksPerMachine)
 		if err != nil {
 			return plan{}, err

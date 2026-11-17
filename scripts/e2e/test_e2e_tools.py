@@ -116,3 +116,83 @@ def test_main_exits_non_zero_when_losses_diverge(tmp_path: Path) -> None:
     assert exit_code == 1
     assert "Problems" in (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert load_scenario(tmp_path / "a.json").validation_accuracy == 0.9
+
+
+def _wan_result(
+    *,
+    accuracy: float,
+    seconds: float,
+    utilization: float,
+    island: int | None = None,
+    members: list[int] | None = None,
+) -> dict:
+    result = {
+        "world_size": 3 if island is None else 1,
+        "global_step": 192,
+        "duration_seconds": seconds,
+        "samples_per_second": 98304 * 3 / seconds,
+        "compute_utilization": utilization,
+        "final_loss": 0.2,
+        "model_sha256": "same",
+        "validation": {"final_accuracy": accuracy},
+    }
+    if island is not None:
+        result["diloco"] = {
+            "island": island,
+            "inner_steps": 64,
+            "compression": "int8",
+            "rounds": 3,
+            "parameters": 76810,
+            "bytes_sent": 80_000,
+            "last_members": members or [0, 1, 2],
+        }
+    return result
+
+
+def _wan_inputs(**overrides: object) -> tuple:
+    ddp = _wan_result(accuracy=0.93, seconds=60.0, utilization=0.02)
+    islands = [
+        _wan_result(accuracy=0.925, seconds=4.0, utilization=0.8, island=i) for i in range(3)
+    ]
+    killed = {
+        "state": "SUCCEEDED",
+        "islands": [{"state": "FAILED"}, {"state": "SUCCEEDED"}, {"state": "SUCCEEDED"}],
+        "result": _wan_result(
+            accuracy=0.92, seconds=5.0, utilization=0.8, island=1, members=[1, 2]
+        ),
+    }
+    values = {"ddp": ddp, "islands": islands, "killed": killed}
+    values.update(overrides)
+    return values["ddp"], values["islands"], values["killed"]
+
+
+def test_wan_report_accepts_a_good_run() -> None:
+    from wan_report import find_problems as wan_problems
+    from wan_report import render as wan_render
+
+    ddp, islands, killed = _wan_inputs()
+    assert wan_problems(ddp, islands, killed, killed_island=0) == []
+    summary = wan_render(
+        ddp, islands, killed, {"description": "netem", "rtt_ms": 50.0, "mbit_per_s": 99.0}
+    )
+    assert "15.0x faster" in summary and "| diloco (H=64, int8)" in summary
+
+
+def test_wan_report_flags_each_failure() -> None:
+    from wan_report import ddp_bytes
+    from wan_report import find_problems as wan_problems
+
+    ddp, islands, killed = _wan_inputs()
+    islands[2] = {**islands[2], "model_sha256": "other"}
+    islands[0] = {**islands[0], "validation": {"final_accuracy": 0.80}, "compute_utilization": 0.3}
+    killed = {**killed, "islands": [{"state": "FAILED"}] * 3, "state": "FAILED"}
+    problems = " | ".join(wan_problems(ddp, islands, killed, killed_island=0))
+    for expected in (
+        "different models",
+        "trails data_parallel",
+        "utilization",
+        "killed-island job",
+    ):
+        assert expected in problems
+    # Ring all-reduce: 2 (n-1)/n of the fp32 gradient per rank per step.
+    assert ddp_bytes({"world_size": 3, "global_step": 1}, 300) == int(2 * 2 / 3 * 1200 * 3)

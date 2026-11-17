@@ -23,6 +23,10 @@ const (
 	RoleAdmin = "admin"
 )
 
+// CoordinatorCommonName is the subject of meshd's server certificate. Clients require it, so a
+// member certificate (which can also authenticate a tmcomm server) cannot pose as meshd.
+const CoordinatorCommonName = "meshd"
+
 const (
 	caCommonName    = "trainmesh-cluster-ca"
 	certFileMode    = 0o644
@@ -103,7 +107,7 @@ func (ca *CA) IssueServer(hosts []string, now time.Time, validity time.Duration)
 	if err != nil {
 		return nil, nil, err
 	}
-	template, err := baseTemplate(now, validity, pkix.Name{CommonName: "meshd"})
+	template, err := baseTemplate(now, validity, pkix.Name{CommonName: CoordinatorCommonName})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -153,6 +157,12 @@ func (ca *CA) signClient(publicKey any, commonName, role string, now time.Time, 
 	}
 	template.KeyUsage = x509.KeyUsageDigitalSignature
 	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	if role == RoleNode {
+		// Island leaders (tmcomm) accept connections from each other and dial each other by node
+		// ID, so node certificates also authenticate servers and name the node as a DNS SAN.
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
+		template.DNSNames = []string{commonName}
+	}
 	der, err := x509.CreateCertificate(rand.Reader, template, ca.Cert, publicKey, ca.key)
 	if err != nil {
 		return nil, fmt.Errorf("issuing client certificate for %s: %w", commonName, err)

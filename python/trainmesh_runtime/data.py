@@ -53,12 +53,28 @@ class GlobalBatchSampler:
     uses positions [k*G, (k+1)*G), G = sum(rank_batch_sizes); rank r takes its contiguous
     slice of that block. The union over ranks is therefore the same global batch for any split
     and any world size. An incomplete final global batch is dropped.
+
+    With DiLoCo islands, island k of K takes blocks k, k+K, k+2K, ...: islands see disjoint data,
+    and together they cover the same samples per epoch as one data-parallel group would.
     """
 
-    def __init__(self, dataset_size: int, rank_batch_sizes: Sequence[int], rank: int, seed: int):
+    def __init__(
+        self,
+        dataset_size: int,
+        rank_batch_sizes: Sequence[int],
+        rank: int,
+        seed: int,
+        *,
+        island: int = 0,
+        islands: int = 1,
+    ):
+        if not 0 <= island < islands:
+            raise ValueError(f"island {island} is not in [0, {islands})")
         self._size = dataset_size
         self._rank = rank
         self._seed = seed
+        self._island = island
+        self._islands = islands
         self._epoch = 0
         self.resize(rank_batch_sizes)
 
@@ -75,12 +91,14 @@ class GlobalBatchSampler:
         self._epoch = epoch
 
     def __len__(self) -> int:
-        return self._size // self._global
+        return self._size // (self._global * self._islands)
 
     def __iter__(self) -> Iterator[torch.Tensor]:
         generator = torch.Generator().manual_seed(self._seed + self._epoch)
         order = torch.randperm(self._size, generator=generator)
-        for start in range(self._offset, len(self) * self._global, self._global):
+        for step in range(len(self)):
+            block = step * self._islands + self._island
+            start = block * self._global + self._offset
             yield order[start : start + self._count]
 
 
@@ -133,10 +151,17 @@ def rank_batch_sizes(settings: TrainingSettings, ctx: DistContext) -> list[int]:
     return sizes
 
 
-def build_train_loader(settings: TrainingSettings, ctx: DistContext) -> BatchLoader:
+def build_train_loader(
+    settings: TrainingSettings, ctx: DistContext, *, island: int = 0, islands: int = 1
+) -> BatchLoader:
     dataset = make_dataset(settings, samples=settings.samples, seed_offset=TRAIN_SEED_OFFSET)
     sampler = GlobalBatchSampler(
-        len(dataset), rank_batch_sizes(settings, ctx), ctx.rank, settings.seed
+        len(dataset),
+        rank_batch_sizes(settings, ctx),
+        ctx.rank,
+        settings.seed,
+        island=island,
+        islands=islands,
     )
     return BatchLoader(dataset, sampler)
 

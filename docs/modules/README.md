@@ -1,8 +1,8 @@
 # Module map
 
-What exists in the code today (end of Phase 2), what each module is responsible for, and how a
-training run flows through them. Target modules that do not exist yet (`tmcomm`, `tmdata`, the
-adaptive planner, …) are described in [TRAINMESH_ARCHITECTURE.md](../TRAINMESH_ARCHITECTURE.md).
+What exists in the code today (end of Phase 3), what each module is responsible for, and how a
+training run flows through them. Target modules that do not exist yet (`tmdata`, the
+adaptive planner, a tmcomm PyTorch process group, …) are described in [TRAINMESH_ARCHITECTURE.md](../TRAINMESH_ARCHITECTURE.md).
 
 | Module | Path | Language | Responsibility | Page |
 |--------|------|----------|----------------|------|
@@ -17,6 +17,8 @@ adaptive planner, …) are described in [TRAINMESH_ARCHITECTURE.md](../TRAINMESH
 | Config loader (Go) | `internal/config` | Go | YAML → `JobSpec`, legacy-key migration, rule check, derived values | [config.md](config.md) |
 | Launcher | `internal/launcher` | Go | Finds the runtime, builds torchrun args/env, supervises ranks as a process group | [launcher.md](launcher.md) |
 | Training runtime | `python/trainmesh_runtime` | Python | Config, data, DDP training, validation, checkpoints, results | [runtime.md](runtime.md) |
+| DiLoCo | `trainmesh_runtime/diloco.py`, `internal/coordinator/islands.go` | Python, Go | Islands, outer loop, quorum rules for jobs | [diloco.md](diloco.md) |
+| tmcomm | `native/tmcomm` | Rust (PyO3) | Compressed, authenticated, failure-tolerant outer all-reduce between island leaders | [tmcomm.md](tmcomm.md) |
 | Devices and balancing | `trainmesh_runtime/{devices,sync,balance,probe}.py`, `internal/coordinator/planner.go` | Python, Go | Device/precision/backend choice, gradient sync for mixed devices, throughput profiles, per-rank batch split | [devices.md](devices.md) |
 | E2E tooling | `scripts/e2e`, `deploy/docker` | Bash, Python | Local, minikube and physical-machine tests; 1-vs-multi machine comparison | [../E2E_TESTING.md](../E2E_TESTING.md) |
 
@@ -62,7 +64,9 @@ share of the batch, writes that plan into the config, and hands each machine a n
 agent's next heartbeat; every agent runs steps 3–5 above for its own
 ranks with `--nnodes/--node_rank/--master_addr` from the coordinator; rank 0's result comes back
 through `meshd` to the CLI. Joining, liveness, failure handling and security are explained in
-[mesh.md](mesh.md).
+[mesh.md](mesh.md). With `strategy: diloco` the machines form islands: each island is its own
+torchrun world, and island leaders exchange compressed pseudo-gradients through `tmcomm` every H
+steps ([diloco.md](diloco.md), [tmcomm.md](tmcomm.md)).
 
 ## Conventions shared by all modules
 

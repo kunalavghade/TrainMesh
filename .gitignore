@@ -12,3 +12,5 @@ bin/
 *.log
 benchmark-results/latest.json
 benchmark-results/e2e/
+deploy/docker/.wan-bin/
+native/target/
