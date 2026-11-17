@@ -28,6 +28,24 @@ DEFAULT_OUTPUT_SIZE = 4
 DEFAULT_OPTIMIZER = "adam"
 DEFAULT_LEARNING_RATE = 0.001
 DEFAULT_CHECKPOINT_DIRECTORY = "./checkpoints"
+DEFAULT_STRATEGY = "data_parallel"
+# DiLoCo defaults: the paper's outer optimizer (Nesterov SGD, lr 0.7, momentum 0.9).
+DEFAULT_INNER_STEPS = 100
+DEFAULT_OUTER_LEARNING_RATE = 0.7
+DEFAULT_OUTER_MOMENTUM = 0.9
+DEFAULT_COMPRESSION = "int8"
+DEFAULT_ROUND_TIMEOUT_SECONDS = 120.0
+
+
+@dataclass(frozen=True, slots=True)
+class DilocoSettings:
+    inner_steps: int
+    outer_learning_rate: float
+    outer_momentum: float
+    compression: str  # none, bf16 or int8
+    machines_per_island: int
+    min_islands: int  # 0 = majority of the islands
+    round_timeout_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +74,8 @@ class TrainingSettings:
     checkpoint_directory: Path
     results_path: str
     resume: str
+    strategy: str
+    diloco: DilocoSettings
 
 
 def load_config(path: str | Path) -> JobSpec:
@@ -120,6 +140,27 @@ def training_settings(spec: JobSpec) -> TrainingSettings:
         checkpoint_directory=Path(checkpoint.directory or DEFAULT_CHECKPOINT_DIRECTORY),
         results_path=spec.run.results_path,
         resume=spec.run.resume,
+        strategy=spec.execution.strategy or DEFAULT_STRATEGY,
+        diloco=_diloco_settings(spec),
+    )
+
+
+def _diloco_settings(spec: JobSpec) -> DilocoSettings:
+    diloco = spec.execution.diloco
+    return DilocoSettings(
+        inner_steps=diloco.inner_steps or DEFAULT_INNER_STEPS,
+        outer_learning_rate=(
+            diloco.outer_learning_rate
+            if diloco.HasField("outer_learning_rate")
+            else DEFAULT_OUTER_LEARNING_RATE
+        ),
+        outer_momentum=(
+            diloco.outer_momentum if diloco.HasField("outer_momentum") else DEFAULT_OUTER_MOMENTUM
+        ),
+        compression=diloco.compression or DEFAULT_COMPRESSION,
+        machines_per_island=diloco.machines_per_island or 1,
+        min_islands=diloco.min_islands,
+        round_timeout_seconds=diloco.round_timeout_seconds or DEFAULT_ROUND_TIMEOUT_SECONDS,
     )
 
 

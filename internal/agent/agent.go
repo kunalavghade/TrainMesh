@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -107,6 +108,26 @@ func (a *Agent) Interface() string { return a.cfg.Interface }
 
 // Device is the device this node trains on for device=auto jobs, known after Start.
 func (a *Agent) Device() string { return a.caps.GetDevice() }
+
+// Address is the IP other machines reach this one at, known after Start.
+func (a *Agent) Address() string { return a.cfg.Address }
+
+// NodeTLSFiles are the identity files in an agent state directory, for tmcomm's mTLS.
+func NodeTLSFiles(stateDir string) TLSFiles {
+	return TLSFiles{
+		Cert: filepath.Join(stateDir, nodeCertFile),
+		Key:  filepath.Join(stateDir, nodeKeyFile),
+		CA:   filepath.Join(stateDir, security.CAFile),
+	}
+}
+
+func islandPeersFromProto(peers []*trainmeshv1.IslandPeer) []IslandPeer {
+	out := make([]IslandPeer, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, IslandPeer{Island: int(p.GetIsland()), Address: p.GetAddress(), Name: p.GetName()})
+	}
+	return out
+}
 
 // Start joins if needed, connects with the node certificate and probes capabilities.
 func (a *Agent) Start(ctx context.Context) error {
@@ -212,12 +233,15 @@ func (a *Agent) startAssignment(ctx context.Context, start *trainmeshv1.StartAss
 		MasterAddr:      start.GetMasterAddr(),
 		MasterPort:      int(start.GetMasterPort()),
 		ConfigYAML:      start.GetConfigYaml(),
+		Island:          int(start.GetIsland()),
+		IslandPeers:     islandPeersFromProto(start.GetIslandPeers()),
+		TmcommPort:      int(start.GetTmcommPort()),
 	})
 }
 
 func (a *Agent) execute(agentCtx, jobCtx context.Context, assignment Assignment) {
 	defer a.jobs.Done()
-	logger := a.logger.With("job", assignment.JobID, "node_rank", assignment.NodeRank)
+	logger := a.logger.With("job", assignment.JobID, "island", assignment.Island, "node_rank", assignment.NodeRank)
 	logger.Info("assignment started", "machines", assignment.Machines, "master", fmt.Sprintf("%s:%d", assignment.MasterAddr, assignment.MasterPort))
 	a.report(assignment.JobID, reportRunning, "", nil)
 

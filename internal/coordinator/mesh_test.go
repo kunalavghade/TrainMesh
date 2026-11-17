@@ -435,3 +435,61 @@ func TestSubmitNeedsEnoughReadyNodes(t *testing.T) {
 		t.Fatalf("SubmitJob = %v, want FailedPrecondition", err)
 	}
 }
+
+const dilocoMeshYAML = `version: 1
+execution:
+  strategy: diloco
+  workers: 3
+  processes_per_worker: 1
+  backend: {device: cpu, communication: gloo}
+  diloco: {inner_steps: 10}
+training:
+  dataset: {type: teacher, samples: 64}
+  batch: {per_rank: 8}
+  epochs: 1
+`
+
+func TestDilocoJobSurvivesALostIsland(t *testing.T) {
+	m := startCoordinator(t)
+	islandTwoFails := func(_ context.Context, a agent.Assignment) ([]byte, error) {
+		if a.Island == 2 {
+			return nil, errors.New("island machine crashed")
+		}
+		return []byte(fmt.Sprintf(`{"island": %d}`, a.Island)), nil
+	}
+	runners := []*fakeRunner{{behavior: islandTwoFails}, {behavior: islandTwoFails}, {behavior: islandTwoFails}}
+	for _, runner := range runners {
+		if _, err := startAgent(t, m.joinString(t), runner); err != nil {
+			t.Fatalf("agent start: %v", err)
+		}
+	}
+	waitFor(t, "three nodes READY", m.allNodes(t, "READY", 3))
+
+	response, err := m.admin.SubmitJob(context.Background(), &trainmeshv1.SubmitJobRequest{ConfigYaml: []byte(dilocoMeshYAML)})
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	jobID := response.GetJobId()
+	waitFor(t, "job to finish", func() bool { return m.job(t, jobID).GetState() != "RUNNING" })
+
+	job := m.job(t, jobID)
+	var result struct{ Island int }
+	if job.GetState() != "SUCCEEDED" || json.Unmarshal(job.GetResultJson(), &result) != nil || result.Island != 0 {
+		t.Fatalf("job %s (%s), result %s; want SUCCEEDED with island 0's result", job.GetState(), job.GetError(), job.GetResultJson())
+	}
+	var states []string
+	for _, island := range job.GetIslands() {
+		states = append(states, island.GetState())
+	}
+	if fmt.Sprint(states) != "[SUCCEEDED SUCCEEDED FAILED]" || job.GetMinIslands() != 2 {
+		t.Errorf("island states %v, min %d", states, job.GetMinIslands())
+	}
+	for _, runner := range runners {
+		for _, a := range runner.assignments() {
+			if a.Machines != 1 || a.NodeRank != 0 || len(a.IslandPeers) != 3 || a.TmcommPort != coordinator.DefaultTmcommPort+a.Island {
+				t.Errorf("island %d assignment = %+v", a.Island, a)
+			}
+		}
+	}
+	waitFor(t, "nodes back to READY", m.allNodes(t, "READY", 3))
+}

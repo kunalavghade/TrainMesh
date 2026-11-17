@@ -9,3 +9,4 @@ trainmesh
 **/.pytest_cache
 **/.ruff_cache
 **/*.egg-info
+native/target

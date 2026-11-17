@@ -520,6 +520,8 @@ func (*Directive_Cancel) isDirective_Kind() {}
 
 // Run node `node_rank` of a job: torchrun --nnodes=machines --node_rank=node_rank
 // --nproc_per_node=ranks_per_machine --master_addr --master_port with config_yaml.
+// For strategy=diloco, machines/node_rank/master_* describe this node's island only, and
+// island_peers lists every island leader's tmcomm endpoint.
 type StartAssignment struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	JobId           string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -529,8 +531,12 @@ type StartAssignment struct {
 	MasterAddr      string                 `protobuf:"bytes,5,opt,name=master_addr,json=masterAddr,proto3" json:"master_addr,omitempty"`
 	MasterPort      int32                  `protobuf:"varint,6,opt,name=master_port,json=masterPort,proto3" json:"master_port,omitempty"`
 	ConfigYaml      []byte                 `protobuf:"bytes,7,opt,name=config_yaml,json=configYaml,proto3" json:"config_yaml,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	Island          int32                  `protobuf:"varint,8,opt,name=island,proto3" json:"island,omitempty"`
+	IslandPeers     []*IslandPeer          `protobuf:"bytes,9,rep,name=island_peers,json=islandPeers,proto3" json:"island_peers,omitempty"`
+	// Port the island leader's tmcomm listens on (on the node's advertised address).
+	TmcommPort    int32 `protobuf:"varint,10,opt,name=tmcomm_port,json=tmcommPort,proto3" json:"tmcomm_port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StartAssignment) Reset() {
@@ -612,6 +618,89 @@ func (x *StartAssignment) GetConfigYaml() []byte {
 	return nil
 }
 
+func (x *StartAssignment) GetIsland() int32 {
+	if x != nil {
+		return x.Island
+	}
+	return 0
+}
+
+func (x *StartAssignment) GetIslandPeers() []*IslandPeer {
+	if x != nil {
+		return x.IslandPeers
+	}
+	return nil
+}
+
+func (x *StartAssignment) GetTmcommPort() int32 {
+	if x != nil {
+		return x.TmcommPort
+	}
+	return 0
+}
+
+type IslandPeer struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Island int32                  `protobuf:"varint,1,opt,name=island,proto3" json:"island,omitempty"`
+	// host:port of the island leader's tmcomm listener.
+	Address string `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	// The leader's node ID: its certificate's DNS name.
+	Name          string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IslandPeer) Reset() {
+	*x = IslandPeer{}
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IslandPeer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IslandPeer) ProtoMessage() {}
+
+func (x *IslandPeer) ProtoReflect() protoreflect.Message {
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IslandPeer.ProtoReflect.Descriptor instead.
+func (*IslandPeer) Descriptor() ([]byte, []int) {
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *IslandPeer) GetIsland() int32 {
+	if x != nil {
+		return x.Island
+	}
+	return 0
+}
+
+func (x *IslandPeer) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *IslandPeer) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 type CancelAssignment struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -622,7 +711,7 @@ type CancelAssignment struct {
 
 func (x *CancelAssignment) Reset() {
 	*x = CancelAssignment{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[8]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -634,7 +723,7 @@ func (x *CancelAssignment) String() string {
 func (*CancelAssignment) ProtoMessage() {}
 
 func (x *CancelAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[8]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -647,7 +736,7 @@ func (x *CancelAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelAssignment.ProtoReflect.Descriptor instead.
 func (*CancelAssignment) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{8}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CancelAssignment) GetJobId() string {
@@ -678,7 +767,7 @@ type ReportAssignmentRequest struct {
 
 func (x *ReportAssignmentRequest) Reset() {
 	*x = ReportAssignmentRequest{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[9]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -690,7 +779,7 @@ func (x *ReportAssignmentRequest) String() string {
 func (*ReportAssignmentRequest) ProtoMessage() {}
 
 func (x *ReportAssignmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[9]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -703,7 +792,7 @@ func (x *ReportAssignmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAssignmentRequest.ProtoReflect.Descriptor instead.
 func (*ReportAssignmentRequest) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{9}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ReportAssignmentRequest) GetJobId() string {
@@ -742,7 +831,7 @@ type ReportAssignmentResponse struct {
 
 func (x *ReportAssignmentResponse) Reset() {
 	*x = ReportAssignmentResponse{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[10]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -754,7 +843,7 @@ func (x *ReportAssignmentResponse) String() string {
 func (*ReportAssignmentResponse) ProtoMessage() {}
 
 func (x *ReportAssignmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[10]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -767,7 +856,7 @@ func (x *ReportAssignmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAssignmentResponse.ProtoReflect.Descriptor instead.
 func (*ReportAssignmentResponse) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{10}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{11}
 }
 
 type CreateTokenRequest struct {
@@ -780,7 +869,7 @@ type CreateTokenRequest struct {
 
 func (x *CreateTokenRequest) Reset() {
 	*x = CreateTokenRequest{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[11]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -792,7 +881,7 @@ func (x *CreateTokenRequest) String() string {
 func (*CreateTokenRequest) ProtoMessage() {}
 
 func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[11]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -805,7 +894,7 @@ func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateTokenRequest) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{11}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CreateTokenRequest) GetTtlSeconds() int64 {
@@ -832,7 +921,7 @@ type CreateTokenResponse struct {
 
 func (x *CreateTokenResponse) Reset() {
 	*x = CreateTokenResponse{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[12]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -844,7 +933,7 @@ func (x *CreateTokenResponse) String() string {
 func (*CreateTokenResponse) ProtoMessage() {}
 
 func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[12]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -857,7 +946,7 @@ func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateTokenResponse) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{12}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CreateTokenResponse) GetJoinString() string {
@@ -892,7 +981,7 @@ type Node struct {
 
 func (x *Node) Reset() {
 	*x = Node{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[13]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +993,7 @@ func (x *Node) String() string {
 func (*Node) ProtoMessage() {}
 
 func (x *Node) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[13]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +1006,7 @@ func (x *Node) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Node.ProtoReflect.Descriptor instead.
 func (*Node) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{13}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Node) GetId() string {
@@ -991,7 +1080,7 @@ type ListNodesRequest struct {
 
 func (x *ListNodesRequest) Reset() {
 	*x = ListNodesRequest{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[14]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1003,7 +1092,7 @@ func (x *ListNodesRequest) String() string {
 func (*ListNodesRequest) ProtoMessage() {}
 
 func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[14]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1016,7 +1105,7 @@ func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
 func (*ListNodesRequest) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{14}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{15}
 }
 
 type ListNodesResponse struct {
@@ -1028,7 +1117,7 @@ type ListNodesResponse struct {
 
 func (x *ListNodesResponse) Reset() {
 	*x = ListNodesResponse{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[15]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1040,7 +1129,7 @@ func (x *ListNodesResponse) String() string {
 func (*ListNodesResponse) ProtoMessage() {}
 
 func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[15]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1053,7 +1142,7 @@ func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
 func (*ListNodesResponse) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{15}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListNodesResponse) GetNodes() []*Node {
@@ -1073,7 +1162,7 @@ type SubmitJobRequest struct {
 
 func (x *SubmitJobRequest) Reset() {
 	*x = SubmitJobRequest{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[16]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1085,7 +1174,7 @@ func (x *SubmitJobRequest) String() string {
 func (*SubmitJobRequest) ProtoMessage() {}
 
 func (x *SubmitJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[16]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1098,7 +1187,7 @@ func (x *SubmitJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitJobRequest.ProtoReflect.Descriptor instead.
 func (*SubmitJobRequest) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{16}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SubmitJobRequest) GetConfigYaml() []byte {
@@ -1117,7 +1206,7 @@ type SubmitJobResponse struct {
 
 func (x *SubmitJobResponse) Reset() {
 	*x = SubmitJobResponse{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[17]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1129,7 +1218,7 @@ func (x *SubmitJobResponse) String() string {
 func (*SubmitJobResponse) ProtoMessage() {}
 
 func (x *SubmitJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[17]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1142,7 +1231,7 @@ func (x *SubmitJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitJobResponse.ProtoReflect.Descriptor instead.
 func (*SubmitJobResponse) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{17}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SubmitJobResponse) GetJobId() string {
@@ -1153,18 +1242,20 @@ func (x *SubmitJobResponse) GetJobId() string {
 }
 
 type Assignment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	NodeRank      int32                  `protobuf:"varint,2,opt,name=node_rank,json=nodeRank,proto3" json:"node_rank,omitempty"`
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	NodeId string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// Within the node's island.
+	NodeRank      int32  `protobuf:"varint,2,opt,name=node_rank,json=nodeRank,proto3" json:"node_rank,omitempty"`
+	State         string `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Island        int32  `protobuf:"varint,5,opt,name=island,proto3" json:"island,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Assignment) Reset() {
 	*x = Assignment{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[18]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1176,7 +1267,7 @@ func (x *Assignment) String() string {
 func (*Assignment) ProtoMessage() {}
 
 func (x *Assignment) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[18]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1189,7 +1280,7 @@ func (x *Assignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Assignment.ProtoReflect.Descriptor instead.
 func (*Assignment) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{18}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Assignment) GetNodeId() string {
@@ -1220,6 +1311,13 @@ func (x *Assignment) GetMessage() string {
 	return ""
 }
 
+func (x *Assignment) GetIsland() int32 {
+	if x != nil {
+		return x.Island
+	}
+	return 0
+}
+
 type Job struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1237,13 +1335,19 @@ type Job struct {
 	RankBatchSizes []int32 `protobuf:"varint,12,rep,packed,name=rank_batch_sizes,json=rankBatchSizes,proto3" json:"rank_batch_sizes,omitempty"`
 	// Collective backend the planner chose: gloo or nccl.
 	Communication string `protobuf:"bytes,13,opt,name=communication,proto3" json:"communication,omitempty"`
+	// data_parallel or diloco.
+	Strategy string `protobuf:"bytes,14,opt,name=strategy,proto3" json:"strategy,omitempty"`
+	// One island for data_parallel; workers / machines_per_island for diloco.
+	Islands []*JobIsland `protobuf:"bytes,15,rep,name=islands,proto3" json:"islands,omitempty"`
+	// Islands that must finish for the job to succeed.
+	MinIslands    int32 `protobuf:"varint,16,opt,name=min_islands,json=minIslands,proto3" json:"min_islands,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Job) Reset() {
 	*x = Job{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[19]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1255,7 +1359,7 @@ func (x *Job) String() string {
 func (*Job) ProtoMessage() {}
 
 func (x *Job) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[19]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1268,7 +1372,7 @@ func (x *Job) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Job.ProtoReflect.Descriptor instead.
 func (*Job) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{19}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Job) GetId() string {
@@ -1362,6 +1466,112 @@ func (x *Job) GetCommunication() string {
 	return ""
 }
 
+func (x *Job) GetStrategy() string {
+	if x != nil {
+		return x.Strategy
+	}
+	return ""
+}
+
+func (x *Job) GetIslands() []*JobIsland {
+	if x != nil {
+		return x.Islands
+	}
+	return nil
+}
+
+func (x *Job) GetMinIslands() int32 {
+	if x != nil {
+		return x.MinIslands
+	}
+	return 0
+}
+
+type JobIsland struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         int32                  `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	MasterAddr    string                 `protobuf:"bytes,2,opt,name=master_addr,json=masterAddr,proto3" json:"master_addr,omitempty"`
+	MasterPort    int32                  `protobuf:"varint,3,opt,name=master_port,json=masterPort,proto3" json:"master_port,omitempty"`
+	NodeIds       []string               `protobuf:"bytes,4,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"`
+	TmcommAddress string                 `protobuf:"bytes,5,opt,name=tmcomm_address,json=tmcommAddress,proto3" json:"tmcomm_address,omitempty"`
+	// RUNNING, SUCCEEDED or FAILED.
+	State         string `protobuf:"bytes,6,opt,name=state,proto3" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JobIsland) Reset() {
+	*x = JobIsland{}
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JobIsland) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JobIsland) ProtoMessage() {}
+
+func (x *JobIsland) ProtoReflect() protoreflect.Message {
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JobIsland.ProtoReflect.Descriptor instead.
+func (*JobIsland) Descriptor() ([]byte, []int) {
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *JobIsland) GetIndex() int32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *JobIsland) GetMasterAddr() string {
+	if x != nil {
+		return x.MasterAddr
+	}
+	return ""
+}
+
+func (x *JobIsland) GetMasterPort() int32 {
+	if x != nil {
+		return x.MasterPort
+	}
+	return 0
+}
+
+func (x *JobIsland) GetNodeIds() []string {
+	if x != nil {
+		return x.NodeIds
+	}
+	return nil
+}
+
+func (x *JobIsland) GetTmcommAddress() string {
+	if x != nil {
+		return x.TmcommAddress
+	}
+	return ""
+}
+
+func (x *JobIsland) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
 type GetJobRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -1371,7 +1581,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[20]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1383,7 +1593,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[20]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1396,7 +1606,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{20}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetJobRequest) GetJobId() string {
@@ -1415,7 +1625,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[21]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1427,7 +1637,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[21]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1440,7 +1650,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{21}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetJobResponse) GetJob() *Job {
@@ -1459,7 +1669,7 @@ type CancelJobRequest struct {
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[22]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1471,7 +1681,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[22]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1484,7 +1694,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{22}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -1502,7 +1712,7 @@ type CancelJobResponse struct {
 
 func (x *CancelJobResponse) Reset() {
 	*x = CancelJobResponse{}
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[23]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1514,7 +1724,7 @@ func (x *CancelJobResponse) String() string {
 func (*CancelJobResponse) ProtoMessage() {}
 
 func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[23]
+	mi := &file_trainmesh_v1_coordinator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1527,7 +1737,7 @@ func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobResponse.ProtoReflect.Descriptor instead.
 func (*CancelJobResponse) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{23}
+	return file_trainmesh_v1_coordinator_proto_rawDescGZIP(), []int{25}
 }
 
 var File_trainmesh_v1_coordinator_proto protoreflect.FileDescriptor
@@ -1569,7 +1779,7 @@ const file_trainmesh_v1_coordinator_proto_rawDesc = "" +
 	"\tDirective\x125\n" +
 	"\x05start\x18\x01 \x01(\v2\x1d.trainmesh.v1.StartAssignmentH\x00R\x05start\x128\n" +
 	"\x06cancel\x18\x02 \x01(\v2\x1e.trainmesh.v1.CancelAssignmentH\x00R\x06cancelB\x06\n" +
-	"\x04kind\"\xf0\x01\n" +
+	"\x04kind\"\xe6\x02\n" +
 	"\x0fStartAssignment\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1b\n" +
 	"\tnode_rank\x18\x02 \x01(\x05R\bnodeRank\x12\x1a\n" +
@@ -1580,7 +1790,17 @@ const file_trainmesh_v1_coordinator_proto_rawDesc = "" +
 	"\vmaster_port\x18\x06 \x01(\x05R\n" +
 	"masterPort\x12\x1f\n" +
 	"\vconfig_yaml\x18\a \x01(\fR\n" +
-	"configYaml\"A\n" +
+	"configYaml\x12\x16\n" +
+	"\x06island\x18\b \x01(\x05R\x06island\x12;\n" +
+	"\fisland_peers\x18\t \x03(\v2\x18.trainmesh.v1.IslandPeerR\vislandPeers\x12\x1f\n" +
+	"\vtmcomm_port\x18\n" +
+	" \x01(\x05R\n" +
+	"tmcommPort\"R\n" +
+	"\n" +
+	"IslandPeer\x12\x16\n" +
+	"\x06island\x18\x01 \x01(\x05R\x06island\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"A\n" +
 	"\x10CancelAssignment\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x81\x01\n" +
@@ -1617,13 +1837,14 @@ const file_trainmesh_v1_coordinator_proto_rawDesc = "" +
 	"\vconfig_yaml\x18\x01 \x01(\fR\n" +
 	"configYaml\"*\n" +
 	"\x11SubmitJobResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"r\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\x8a\x01\n" +
 	"\n" +
 	"Assignment\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\tnode_rank\x18\x02 \x01(\x05R\bnodeRank\x12\x14\n" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xf0\x03\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12\x16\n" +
+	"\x06island\x18\x05 \x01(\x05R\x06island\"\xe0\x04\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1a\n" +
@@ -1643,7 +1864,20 @@ const file_trainmesh_v1_coordinator_proto_rawDesc = "" +
 	"\vfinished_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12(\n" +
 	"\x10rank_batch_sizes\x18\f \x03(\x05R\x0erankBatchSizes\x12$\n" +
-	"\rcommunication\x18\r \x01(\tR\rcommunication\"&\n" +
+	"\rcommunication\x18\r \x01(\tR\rcommunication\x12\x1a\n" +
+	"\bstrategy\x18\x0e \x01(\tR\bstrategy\x121\n" +
+	"\aislands\x18\x0f \x03(\v2\x17.trainmesh.v1.JobIslandR\aislands\x12\x1f\n" +
+	"\vmin_islands\x18\x10 \x01(\x05R\n" +
+	"minIslands\"\xbb\x01\n" +
+	"\tJobIsland\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\x05R\x05index\x12\x1f\n" +
+	"\vmaster_addr\x18\x02 \x01(\tR\n" +
+	"masterAddr\x12\x1f\n" +
+	"\vmaster_port\x18\x03 \x01(\x05R\n" +
+	"masterPort\x12\x19\n" +
+	"\bnode_ids\x18\x04 \x03(\tR\anodeIds\x12%\n" +
+	"\x0etmcomm_address\x18\x05 \x01(\tR\rtmcommAddress\x12\x14\n" +
+	"\x05state\x18\x06 \x01(\tR\x05state\"&\n" +
 	"\rGetJobRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"5\n" +
 	"\x0eGetJobResponse\x12#\n" +
@@ -1673,7 +1907,7 @@ func file_trainmesh_v1_coordinator_proto_rawDescGZIP() []byte {
 	return file_trainmesh_v1_coordinator_proto_rawDescData
 }
 
-var file_trainmesh_v1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_trainmesh_v1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_trainmesh_v1_coordinator_proto_goTypes = []any{
 	(*Capabilities)(nil),             // 0: trainmesh.v1.Capabilities
 	(*DeviceProfile)(nil),            // 1: trainmesh.v1.DeviceProfile
@@ -1683,60 +1917,64 @@ var file_trainmesh_v1_coordinator_proto_goTypes = []any{
 	(*HeartbeatResponse)(nil),        // 5: trainmesh.v1.HeartbeatResponse
 	(*Directive)(nil),                // 6: trainmesh.v1.Directive
 	(*StartAssignment)(nil),          // 7: trainmesh.v1.StartAssignment
-	(*CancelAssignment)(nil),         // 8: trainmesh.v1.CancelAssignment
-	(*ReportAssignmentRequest)(nil),  // 9: trainmesh.v1.ReportAssignmentRequest
-	(*ReportAssignmentResponse)(nil), // 10: trainmesh.v1.ReportAssignmentResponse
-	(*CreateTokenRequest)(nil),       // 11: trainmesh.v1.CreateTokenRequest
-	(*CreateTokenResponse)(nil),      // 12: trainmesh.v1.CreateTokenResponse
-	(*Node)(nil),                     // 13: trainmesh.v1.Node
-	(*ListNodesRequest)(nil),         // 14: trainmesh.v1.ListNodesRequest
-	(*ListNodesResponse)(nil),        // 15: trainmesh.v1.ListNodesResponse
-	(*SubmitJobRequest)(nil),         // 16: trainmesh.v1.SubmitJobRequest
-	(*SubmitJobResponse)(nil),        // 17: trainmesh.v1.SubmitJobResponse
-	(*Assignment)(nil),               // 18: trainmesh.v1.Assignment
-	(*Job)(nil),                      // 19: trainmesh.v1.Job
-	(*GetJobRequest)(nil),            // 20: trainmesh.v1.GetJobRequest
-	(*GetJobResponse)(nil),           // 21: trainmesh.v1.GetJobResponse
-	(*CancelJobRequest)(nil),         // 22: trainmesh.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),        // 23: trainmesh.v1.CancelJobResponse
-	(*timestamppb.Timestamp)(nil),    // 24: google.protobuf.Timestamp
+	(*IslandPeer)(nil),               // 8: trainmesh.v1.IslandPeer
+	(*CancelAssignment)(nil),         // 9: trainmesh.v1.CancelAssignment
+	(*ReportAssignmentRequest)(nil),  // 10: trainmesh.v1.ReportAssignmentRequest
+	(*ReportAssignmentResponse)(nil), // 11: trainmesh.v1.ReportAssignmentResponse
+	(*CreateTokenRequest)(nil),       // 12: trainmesh.v1.CreateTokenRequest
+	(*CreateTokenResponse)(nil),      // 13: trainmesh.v1.CreateTokenResponse
+	(*Node)(nil),                     // 14: trainmesh.v1.Node
+	(*ListNodesRequest)(nil),         // 15: trainmesh.v1.ListNodesRequest
+	(*ListNodesResponse)(nil),        // 16: trainmesh.v1.ListNodesResponse
+	(*SubmitJobRequest)(nil),         // 17: trainmesh.v1.SubmitJobRequest
+	(*SubmitJobResponse)(nil),        // 18: trainmesh.v1.SubmitJobResponse
+	(*Assignment)(nil),               // 19: trainmesh.v1.Assignment
+	(*Job)(nil),                      // 20: trainmesh.v1.Job
+	(*JobIsland)(nil),                // 21: trainmesh.v1.JobIsland
+	(*GetJobRequest)(nil),            // 22: trainmesh.v1.GetJobRequest
+	(*GetJobResponse)(nil),           // 23: trainmesh.v1.GetJobResponse
+	(*CancelJobRequest)(nil),         // 24: trainmesh.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),        // 25: trainmesh.v1.CancelJobResponse
+	(*timestamppb.Timestamp)(nil),    // 26: google.protobuf.Timestamp
 }
 var file_trainmesh_v1_coordinator_proto_depIdxs = []int32{
 	1,  // 0: trainmesh.v1.Capabilities.devices:type_name -> trainmesh.v1.DeviceProfile
 	0,  // 1: trainmesh.v1.HeartbeatRequest.capabilities:type_name -> trainmesh.v1.Capabilities
 	6,  // 2: trainmesh.v1.HeartbeatResponse.directives:type_name -> trainmesh.v1.Directive
 	7,  // 3: trainmesh.v1.Directive.start:type_name -> trainmesh.v1.StartAssignment
-	8,  // 4: trainmesh.v1.Directive.cancel:type_name -> trainmesh.v1.CancelAssignment
-	24, // 5: trainmesh.v1.CreateTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	0,  // 6: trainmesh.v1.Node.capabilities:type_name -> trainmesh.v1.Capabilities
-	24, // 7: trainmesh.v1.Node.joined_at:type_name -> google.protobuf.Timestamp
-	24, // 8: trainmesh.v1.Node.last_heartbeat:type_name -> google.protobuf.Timestamp
-	13, // 9: trainmesh.v1.ListNodesResponse.nodes:type_name -> trainmesh.v1.Node
-	18, // 10: trainmesh.v1.Job.assignments:type_name -> trainmesh.v1.Assignment
-	24, // 11: trainmesh.v1.Job.created_at:type_name -> google.protobuf.Timestamp
-	24, // 12: trainmesh.v1.Job.finished_at:type_name -> google.protobuf.Timestamp
-	19, // 13: trainmesh.v1.GetJobResponse.job:type_name -> trainmesh.v1.Job
-	2,  // 14: trainmesh.v1.CoordinatorService.Join:input_type -> trainmesh.v1.JoinRequest
-	4,  // 15: trainmesh.v1.CoordinatorService.Heartbeat:input_type -> trainmesh.v1.HeartbeatRequest
-	9,  // 16: trainmesh.v1.CoordinatorService.ReportAssignment:input_type -> trainmesh.v1.ReportAssignmentRequest
-	11, // 17: trainmesh.v1.CoordinatorService.CreateToken:input_type -> trainmesh.v1.CreateTokenRequest
-	14, // 18: trainmesh.v1.CoordinatorService.ListNodes:input_type -> trainmesh.v1.ListNodesRequest
-	16, // 19: trainmesh.v1.CoordinatorService.SubmitJob:input_type -> trainmesh.v1.SubmitJobRequest
-	20, // 20: trainmesh.v1.CoordinatorService.GetJob:input_type -> trainmesh.v1.GetJobRequest
-	22, // 21: trainmesh.v1.CoordinatorService.CancelJob:input_type -> trainmesh.v1.CancelJobRequest
-	3,  // 22: trainmesh.v1.CoordinatorService.Join:output_type -> trainmesh.v1.JoinResponse
-	5,  // 23: trainmesh.v1.CoordinatorService.Heartbeat:output_type -> trainmesh.v1.HeartbeatResponse
-	10, // 24: trainmesh.v1.CoordinatorService.ReportAssignment:output_type -> trainmesh.v1.ReportAssignmentResponse
-	12, // 25: trainmesh.v1.CoordinatorService.CreateToken:output_type -> trainmesh.v1.CreateTokenResponse
-	15, // 26: trainmesh.v1.CoordinatorService.ListNodes:output_type -> trainmesh.v1.ListNodesResponse
-	17, // 27: trainmesh.v1.CoordinatorService.SubmitJob:output_type -> trainmesh.v1.SubmitJobResponse
-	21, // 28: trainmesh.v1.CoordinatorService.GetJob:output_type -> trainmesh.v1.GetJobResponse
-	23, // 29: trainmesh.v1.CoordinatorService.CancelJob:output_type -> trainmesh.v1.CancelJobResponse
-	22, // [22:30] is the sub-list for method output_type
-	14, // [14:22] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	9,  // 4: trainmesh.v1.Directive.cancel:type_name -> trainmesh.v1.CancelAssignment
+	8,  // 5: trainmesh.v1.StartAssignment.island_peers:type_name -> trainmesh.v1.IslandPeer
+	26, // 6: trainmesh.v1.CreateTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 7: trainmesh.v1.Node.capabilities:type_name -> trainmesh.v1.Capabilities
+	26, // 8: trainmesh.v1.Node.joined_at:type_name -> google.protobuf.Timestamp
+	26, // 9: trainmesh.v1.Node.last_heartbeat:type_name -> google.protobuf.Timestamp
+	14, // 10: trainmesh.v1.ListNodesResponse.nodes:type_name -> trainmesh.v1.Node
+	19, // 11: trainmesh.v1.Job.assignments:type_name -> trainmesh.v1.Assignment
+	26, // 12: trainmesh.v1.Job.created_at:type_name -> google.protobuf.Timestamp
+	26, // 13: trainmesh.v1.Job.finished_at:type_name -> google.protobuf.Timestamp
+	21, // 14: trainmesh.v1.Job.islands:type_name -> trainmesh.v1.JobIsland
+	20, // 15: trainmesh.v1.GetJobResponse.job:type_name -> trainmesh.v1.Job
+	2,  // 16: trainmesh.v1.CoordinatorService.Join:input_type -> trainmesh.v1.JoinRequest
+	4,  // 17: trainmesh.v1.CoordinatorService.Heartbeat:input_type -> trainmesh.v1.HeartbeatRequest
+	10, // 18: trainmesh.v1.CoordinatorService.ReportAssignment:input_type -> trainmesh.v1.ReportAssignmentRequest
+	12, // 19: trainmesh.v1.CoordinatorService.CreateToken:input_type -> trainmesh.v1.CreateTokenRequest
+	15, // 20: trainmesh.v1.CoordinatorService.ListNodes:input_type -> trainmesh.v1.ListNodesRequest
+	17, // 21: trainmesh.v1.CoordinatorService.SubmitJob:input_type -> trainmesh.v1.SubmitJobRequest
+	22, // 22: trainmesh.v1.CoordinatorService.GetJob:input_type -> trainmesh.v1.GetJobRequest
+	24, // 23: trainmesh.v1.CoordinatorService.CancelJob:input_type -> trainmesh.v1.CancelJobRequest
+	3,  // 24: trainmesh.v1.CoordinatorService.Join:output_type -> trainmesh.v1.JoinResponse
+	5,  // 25: trainmesh.v1.CoordinatorService.Heartbeat:output_type -> trainmesh.v1.HeartbeatResponse
+	11, // 26: trainmesh.v1.CoordinatorService.ReportAssignment:output_type -> trainmesh.v1.ReportAssignmentResponse
+	13, // 27: trainmesh.v1.CoordinatorService.CreateToken:output_type -> trainmesh.v1.CreateTokenResponse
+	16, // 28: trainmesh.v1.CoordinatorService.ListNodes:output_type -> trainmesh.v1.ListNodesResponse
+	18, // 29: trainmesh.v1.CoordinatorService.SubmitJob:output_type -> trainmesh.v1.SubmitJobResponse
+	23, // 30: trainmesh.v1.CoordinatorService.GetJob:output_type -> trainmesh.v1.GetJobResponse
+	25, // 31: trainmesh.v1.CoordinatorService.CancelJob:output_type -> trainmesh.v1.CancelJobResponse
+	24, // [24:32] is the sub-list for method output_type
+	16, // [16:24] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_trainmesh_v1_coordinator_proto_init() }
@@ -1754,7 +1992,7 @@ func file_trainmesh_v1_coordinator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_trainmesh_v1_coordinator_proto_rawDesc), len(file_trainmesh_v1_coordinator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -845,6 +845,27 @@ smoke job not run: no hardware). Not built in P2: `torch.compile`, FLOPs/memory 
 link (bandwidth/latency) matrix, and multi-island jobs (P3). See
 [modules/devices.md](modules/devices.md) and [E2E_TESTING.md](E2E_TESTING.md) level 1c.
 
+**Phase 3 status (2026-11-17): DiLoCo across islands with the first Rust data-plane crate,
+verified over an emulated WAN; QUIC, NAT traversal, hierarchical all-reduce and a tmcomm
+ProcessGroup not built.** Built: `execution.strategy: diloco` (islands of `machines_per_island`
+machines, each its own torchrun world; disjoint data per island; inner steps synchronised inside
+the island; every H steps an outer Nesterov step on averaged pseudo-gradients); the Rust crate
+`tmcomm` (`native/tmcomm`, PyO3): f32/bf16/int8 codecs with error feedback, a length-checked wire
+format, TLS 1.3 mTLS with the cluster CA (node certificates now name the node and allow server
+auth; clients check `meshd`'s identity so this cannot be used to impersonate it), and an outer
+all-reduce with digest checks, majority quorum and root failover; coordinator islands (per-island
+master and tmcomm ports, island-scoped failure, quorum-based job settlement, lowest-island
+result). Acceptance (level 4, one host, 3 CPU islands, tc netem 50 ms RTT / 100 Mbit/s): diloco
+reached 69% compute utilization (target 60%) against 3% for per-step all-reduce, finished the
+same samples 37× faster with 255× fewer bytes and equal-or-better accuracy (96.2% vs 95.2%); with
+the root island killed mid-run the other two elected a new root and the job succeeded. Not met
+or not built: islands on different hardware (NVIDIA, Apple) — all three were CPU containers on
+one host; QUIC transport and NAT hole punching/relay (leaders must reach each other directly);
+hierarchical/ring all-reduce inside tmcomm (star via the root, fine for a few islands);
+`ProcessGroupTM` for PyTorch; asynchronous or per-island H for islands of different speed. See
+[modules/diloco.md](modules/diloco.md), [modules/tmcomm.md](modules/tmcomm.md) and
+[E2E_TESTING.md](E2E_TESTING.md) level 4.
+
 | Phase | Scope | Acceptance criteria |
 |-------|-------|---------------------|
 | **P0 — Cleanup & correctness** | §9 fix list, git + CI, proto schema v1, config v2 parser with v1 compatibility | `no_sync` test proves 1 all-reduce per optimizer step; no throughput regression vs the current baseline (numbers recorded); no pickle loads; Go/Python lint + tests green in CI. |

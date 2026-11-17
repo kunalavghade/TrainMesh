@@ -20,11 +20,14 @@ JobSpec
 ├── version            must be 1
 ├── cluster.name
 ├── run                name, seed (optional, default 42), resume, results_path
-├── execution          strategy=data_parallel, workers ≥ 1, processes_per_worker ≥ 1,
+├── execution          strategy ∈ {data_parallel, diloco}, workers ≥ 1, processes_per_worker ≥ 1,
 │                      cpu_threads_per_rank ≥ 0,
 │                      backend{device ∈ {cpu, mps, cuda, auto}, communication ∈ {gloo, nccl, auto}}
 │                        (nccl needs device=cuda), gradient_sync ∈ {"", auto, ddp, allreduce},
-│                      rendezvous{backend, endpoint} (informational)
+│                      rendezvous{backend, endpoint} (informational),
+│                      diloco{inner_steps, outer_learning_rate, outer_momentum,
+│                        compression ∈ {"", none, bf16, int8}, machines_per_island,
+│                        min_islands, round_timeout_seconds}  (see diloco.md)
 ├── training
 │   ├── model          type ∈ {"", mlp}, input/hidden/output sizes ≥ 0 (0 = default)
 │   ├── dataset        type ∈ {synthetic, teacher}, samples > 0, input/output sizes

@@ -231,8 +231,11 @@ func (x *Run) GetResultsPath() string {
 }
 
 type Execution struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Strategy string                 `protobuf:"bytes,1,opt,name=strategy,proto3" json:"strategy,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// data_parallel: every rank synchronises gradients every step (DDP or all-reduce).
+	// diloco: ranks synchronise every step only inside their island; island leaders average
+	// pseudo-gradients every diloco.inner_steps steps through tmcomm (made for slow links).
+	Strategy string `protobuf:"bytes,1,opt,name=strategy,proto3" json:"strategy,omitempty"`
 	// Machines in the job. The CLI can launch only 1 until the Phase 1 agent exists.
 	Workers            int32 `protobuf:"varint,2,opt,name=workers,proto3" json:"workers,omitempty"`
 	ProcessesPerWorker int32 `protobuf:"varint,3,opt,name=processes_per_worker,json=processesPerWorker,proto3" json:"processes_per_worker,omitempty"`
@@ -244,7 +247,9 @@ type Execution struct {
 	// allreduce: one flattened all-reduce per optimizer step, staged through CPU memory when the
 	// device cannot use the collective backend (MPS); needed for unequal per-rank batches.
 	// Empty or auto: ddp when possible, otherwise allreduce.
-	GradientSync  string `protobuf:"bytes,7,opt,name=gradient_sync,json=gradientSync,proto3" json:"gradient_sync,omitempty"`
+	GradientSync string `protobuf:"bytes,7,opt,name=gradient_sync,json=gradientSync,proto3" json:"gradient_sync,omitempty"`
+	// Settings of strategy=diloco; ignored otherwise.
+	Diloco        *Diloco `protobuf:"bytes,8,opt,name=diloco,proto3" json:"diloco,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -328,6 +333,117 @@ func (x *Execution) GetGradientSync() string {
 	return ""
 }
 
+func (x *Execution) GetDiloco() *Diloco {
+	if x != nil {
+		return x.Diloco
+	}
+	return nil
+}
+
+// DiLoCo (Douillard et al., 2023): islands train independently for inner_steps optimizer steps,
+// then average their pseudo-gradients (start-of-round weights minus current weights) and apply
+// them with an outer Nesterov-momentum SGD step. Traffic between islands drops by inner_steps x
+// compared with per-step synchronisation, and by a further 4x with int8 compression.
+type Diloco struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Inner optimizer steps per outer round (H). 0 means 100.
+	InnerSteps int32 `protobuf:"varint,1,opt,name=inner_steps,json=innerSteps,proto3" json:"inner_steps,omitempty"`
+	// Outer SGD learning rate. Unset means 0.7 (the DiLoCo paper's value).
+	OuterLearningRate *float64 `protobuf:"fixed64,2,opt,name=outer_learning_rate,json=outerLearningRate,proto3,oneof" json:"outer_learning_rate,omitempty"`
+	// Outer Nesterov momentum. Unset means 0.9.
+	OuterMomentum *float64 `protobuf:"fixed64,3,opt,name=outer_momentum,json=outerMomentum,proto3,oneof" json:"outer_momentum,omitempty"`
+	// Pseudo-gradient encoding between islands: none (fp32), bf16 or int8. Empty means int8.
+	// bf16 and int8 use error feedback, so what is dropped in one round is sent in the next.
+	Compression string `protobuf:"bytes,4,opt,name=compression,proto3" json:"compression,omitempty"`
+	// Machines that form one island (synchronised every step over a fast link). 0 means 1.
+	MachinesPerIsland int32 `protobuf:"varint,5,opt,name=machines_per_island,json=machinesPerIsland,proto3" json:"machines_per_island,omitempty"`
+	// Islands that must contribute to every round for training to continue. 0 means a majority.
+	MinIslands int32 `protobuf:"varint,6,opt,name=min_islands,json=minIslands,proto3" json:"min_islands,omitempty"`
+	// How long the root waits for every island's contribution. 0 means 120 s.
+	RoundTimeoutSeconds float64 `protobuf:"fixed64,7,opt,name=round_timeout_seconds,json=roundTimeoutSeconds,proto3" json:"round_timeout_seconds,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *Diloco) Reset() {
+	*x = Diloco{}
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Diloco) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Diloco) ProtoMessage() {}
+
+func (x *Diloco) ProtoReflect() protoreflect.Message {
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Diloco.ProtoReflect.Descriptor instead.
+func (*Diloco) Descriptor() ([]byte, []int) {
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Diloco) GetInnerSteps() int32 {
+	if x != nil {
+		return x.InnerSteps
+	}
+	return 0
+}
+
+func (x *Diloco) GetOuterLearningRate() float64 {
+	if x != nil && x.OuterLearningRate != nil {
+		return *x.OuterLearningRate
+	}
+	return 0
+}
+
+func (x *Diloco) GetOuterMomentum() float64 {
+	if x != nil && x.OuterMomentum != nil {
+		return *x.OuterMomentum
+	}
+	return 0
+}
+
+func (x *Diloco) GetCompression() string {
+	if x != nil {
+		return x.Compression
+	}
+	return ""
+}
+
+func (x *Diloco) GetMachinesPerIsland() int32 {
+	if x != nil {
+		return x.MachinesPerIsland
+	}
+	return 0
+}
+
+func (x *Diloco) GetMinIslands() int32 {
+	if x != nil {
+		return x.MinIslands
+	}
+	return 0
+}
+
+func (x *Diloco) GetRoundTimeoutSeconds() float64 {
+	if x != nil {
+		return x.RoundTimeoutSeconds
+	}
+	return 0
+}
+
 type Backend struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// cpu, mps (Apple GPU), cuda (NVIDIA; AMD ROCm builds of PyTorch also report cuda), or auto:
@@ -342,7 +458,7 @@ type Backend struct {
 
 func (x *Backend) Reset() {
 	*x = Backend{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[4]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -354,7 +470,7 @@ func (x *Backend) String() string {
 func (*Backend) ProtoMessage() {}
 
 func (x *Backend) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[4]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -367,7 +483,7 @@ func (x *Backend) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Backend.ProtoReflect.Descriptor instead.
 func (*Backend) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{4}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Backend) GetDevice() string {
@@ -395,7 +511,7 @@ type Rendezvous struct {
 
 func (x *Rendezvous) Reset() {
 	*x = Rendezvous{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[5]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -407,7 +523,7 @@ func (x *Rendezvous) String() string {
 func (*Rendezvous) ProtoMessage() {}
 
 func (x *Rendezvous) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[5]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -420,7 +536,7 @@ func (x *Rendezvous) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Rendezvous.ProtoReflect.Descriptor instead.
 func (*Rendezvous) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{5}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Rendezvous) GetBackend() string {
@@ -455,7 +571,7 @@ type Training struct {
 
 func (x *Training) Reset() {
 	*x = Training{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[6]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -467,7 +583,7 @@ func (x *Training) String() string {
 func (*Training) ProtoMessage() {}
 
 func (x *Training) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[6]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -480,7 +596,7 @@ func (x *Training) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Training.ProtoReflect.Descriptor instead.
 func (*Training) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{6}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Training) GetModel() *Model {
@@ -553,7 +669,7 @@ type Model struct {
 
 func (x *Model) Reset() {
 	*x = Model{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[7]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -565,7 +681,7 @@ func (x *Model) String() string {
 func (*Model) ProtoMessage() {}
 
 func (x *Model) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[7]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -578,7 +694,7 @@ func (x *Model) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Model.ProtoReflect.Descriptor instead.
 func (*Model) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{7}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Model) GetType() string {
@@ -624,7 +740,7 @@ type Dataset struct {
 
 func (x *Dataset) Reset() {
 	*x = Dataset{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[8]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -636,7 +752,7 @@ func (x *Dataset) String() string {
 func (*Dataset) ProtoMessage() {}
 
 func (x *Dataset) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[8]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -649,7 +765,7 @@ func (x *Dataset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Dataset.ProtoReflect.Descriptor instead.
 func (*Dataset) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{8}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Dataset) GetType() string {
@@ -692,7 +808,7 @@ type Optimizer struct {
 
 func (x *Optimizer) Reset() {
 	*x = Optimizer{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[9]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -704,7 +820,7 @@ func (x *Optimizer) String() string {
 func (*Optimizer) ProtoMessage() {}
 
 func (x *Optimizer) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[9]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -717,7 +833,7 @@ func (x *Optimizer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Optimizer.ProtoReflect.Descriptor instead.
 func (*Optimizer) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{9}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Optimizer) GetName() string {
@@ -753,7 +869,7 @@ type Batch struct {
 
 func (x *Batch) Reset() {
 	*x = Batch{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[10]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -765,7 +881,7 @@ func (x *Batch) String() string {
 func (*Batch) ProtoMessage() {}
 
 func (x *Batch) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[10]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -778,7 +894,7 @@ func (x *Batch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Batch.ProtoReflect.Descriptor instead.
 func (*Batch) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{10}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Batch) GetPerRank() int32 {
@@ -821,7 +937,7 @@ type Checkpoint struct {
 
 func (x *Checkpoint) Reset() {
 	*x = Checkpoint{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[11]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -833,7 +949,7 @@ func (x *Checkpoint) String() string {
 func (*Checkpoint) ProtoMessage() {}
 
 func (x *Checkpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[11]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -846,7 +962,7 @@ func (x *Checkpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Checkpoint.ProtoReflect.Descriptor instead.
 func (*Checkpoint) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{11}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Checkpoint) GetEnabled() bool {
@@ -873,7 +989,7 @@ type Validation struct {
 
 func (x *Validation) Reset() {
 	*x = Validation{}
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[12]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -885,7 +1001,7 @@ func (x *Validation) String() string {
 func (*Validation) ProtoMessage() {}
 
 func (x *Validation) ProtoReflect() protoreflect.Message {
-	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[12]
+	mi := &file_trainmesh_v1_jobspec_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -898,7 +1014,7 @@ func (x *Validation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Validation.ProtoReflect.Descriptor instead.
 func (*Validation) Descriptor() ([]byte, []int) {
-	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{12}
+	return file_trainmesh_v1_jobspec_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Validation) GetSamples() int32 {
@@ -928,10 +1044,10 @@ const file_trainmesh_v1_jobspec_proto_rawDesc = "" +
 	"\x04seed\x18\x02 \x01(\x03H\x00R\x04seed\x88\x01\x01\x12\x16\n" +
 	"\x06resume\x18\x03 \x01(\tR\x06resume\x12!\n" +
 	"\fresults_path\x18\x04 \x01(\tR\vresultsPathB\a\n" +
-	"\x05_seed\"\xc8\x04\n" +
-	"\tExecution\x12\x85\x01\n" +
-	"\bstrategy\x18\x01 \x01(\tBi\xbaHf\xba\x01c\n" +
-	"\x12execution.strategy\x124only execution.strategy=data_parallel is implemented\x1a\x17this == 'data_parallel'R\bstrategy\x12!\n" +
+	"\x05_seed\"\x88\t\n" +
+	"\tExecution\x12\x8f\x01\n" +
+	"\bstrategy\x18\x01 \x01(\tBs\xbaHp\xba\x01m\n" +
+	"\x12execution.strategy\x122execution.strategy must be data_parallel or diloco\x1a#this in ['data_parallel', 'diloco']R\bstrategy\x12!\n" +
 	"\aworkers\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02(\x01R\aworkers\x129\n" +
 	"\x14processes_per_worker\x18\x03 \x01(\x05B\a\xbaH\x04\x1a\x02(\x01R\x12processesPerWorker\x128\n" +
 	"\x14cpu_threads_per_rank\x18\x04 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\x11cpuThreadsPerRank\x127\n" +
@@ -940,7 +1056,23 @@ const file_trainmesh_v1_jobspec_proto_rawDesc = "" +
 	"rendezvous\x18\x06 \x01(\v2\x18.trainmesh.v1.RendezvousR\n" +
 	"rendezvous\x12\xa7\x01\n" +
 	"\rgradient_sync\x18\a \x01(\tB\x81\x01\xbaH~\xba\x01{\n" +
-	"\x17execution.gradient_sync\x126execution.gradient_sync must be auto, ddp or allreduce\x1a(this in ['', 'auto', 'ddp', 'allreduce']R\fgradientSync\"\x98\x04\n" +
+	"\x17execution.gradient_sync\x126execution.gradient_sync must be auto, ddp or allreduce\x1a(this in ['', 'auto', 'ddp', 'allreduce']R\fgradientSync\x12,\n" +
+	"\x06diloco\x18\b \x01(\v2\x14.trainmesh.v1.DilocoR\x06diloco:\x85\x04\xbaH\x81\x04\x1a\xe6\x01\n" +
+	"\x18execution.diloco.islands\x12Lexecution.workers must be a multiple of execution.diloco.machines_per_island\x1a|this.strategy != 'diloco' || this.workers % (this.diloco.machines_per_island > 1 ? this.diloco.machines_per_island : 1) == 0\x1a\x95\x02\n" +
+	"\x1cexecution.diloco.min_islands\x12`execution.diloco.min_islands cannot exceed the number of islands (workers / machines_per_island)\x1a\x92\x01this.strategy != 'diloco' || this.diloco.min_islands <= this.workers / (this.diloco.machines_per_island > 1 ? this.diloco.machines_per_island : 1)\"\xc1\x04\n" +
+	"\x06Diloco\x12(\n" +
+	"\vinner_steps\x18\x01 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\n" +
+	"innerSteps\x12L\n" +
+	"\x13outer_learning_rate\x18\x02 \x01(\x01B\x17\xbaH\x14\x12\x12\x19\x00\x00\x00\x00\x00\x00$@!\x00\x00\x00\x00\x00\x00\x00\x00H\x00R\x11outerLearningRate\x88\x01\x01\x12C\n" +
+	"\x0eouter_momentum\x18\x03 \x01(\x01B\x17\xbaH\x14\x12\x12\x11\x00\x00\x00\x00\x00\x00\xf0?)\x00\x00\x00\x00\x00\x00\x00\x00H\x01R\routerMomentum\x88\x01\x01\x12\xa7\x01\n" +
+	"\vcompression\x18\x04 \x01(\tB\x84\x01\xbaH\x80\x01\xba\x01}\n" +
+	"\x1cexecution.diloco.compression\x127execution.diloco.compression must be none, bf16 or int8\x1a$this in ['', 'none', 'bf16', 'int8']R\vcompression\x127\n" +
+	"\x13machines_per_island\x18\x05 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\x11machinesPerIsland\x12(\n" +
+	"\vmin_islands\x18\x06 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\n" +
+	"minIslands\x12B\n" +
+	"\x15round_timeout_seconds\x18\a \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13roundTimeoutSecondsB\x16\n" +
+	"\x14_outer_learning_rateB\x11\n" +
+	"\x0f_outer_momentum\"\x98\x04\n" +
 	"\aBackend\x12\x9a\x01\n" +
 	"\x06device\x18\x01 \x01(\tB\x81\x01\xbaH~\xba\x01{\n" +
 	"\x18execution.backend.device\x127execution.backend.device must be cpu, mps, cuda or auto\x1a&this in ['cpu', 'mps', 'cuda', 'auto']R\x06device\x12\xad\x01\n" +
@@ -1014,42 +1146,44 @@ func file_trainmesh_v1_jobspec_proto_rawDescGZIP() []byte {
 	return file_trainmesh_v1_jobspec_proto_rawDescData
 }
 
-var file_trainmesh_v1_jobspec_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_trainmesh_v1_jobspec_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_trainmesh_v1_jobspec_proto_goTypes = []any{
 	(*JobSpec)(nil),         // 0: trainmesh.v1.JobSpec
 	(*Cluster)(nil),         // 1: trainmesh.v1.Cluster
 	(*Run)(nil),             // 2: trainmesh.v1.Run
 	(*Execution)(nil),       // 3: trainmesh.v1.Execution
-	(*Backend)(nil),         // 4: trainmesh.v1.Backend
-	(*Rendezvous)(nil),      // 5: trainmesh.v1.Rendezvous
-	(*Training)(nil),        // 6: trainmesh.v1.Training
-	(*Model)(nil),           // 7: trainmesh.v1.Model
-	(*Dataset)(nil),         // 8: trainmesh.v1.Dataset
-	(*Optimizer)(nil),       // 9: trainmesh.v1.Optimizer
-	(*Batch)(nil),           // 10: trainmesh.v1.Batch
-	(*Checkpoint)(nil),      // 11: trainmesh.v1.Checkpoint
-	(*Validation)(nil),      // 12: trainmesh.v1.Validation
-	(*structpb.Struct)(nil), // 13: google.protobuf.Struct
+	(*Diloco)(nil),          // 4: trainmesh.v1.Diloco
+	(*Backend)(nil),         // 5: trainmesh.v1.Backend
+	(*Rendezvous)(nil),      // 6: trainmesh.v1.Rendezvous
+	(*Training)(nil),        // 7: trainmesh.v1.Training
+	(*Model)(nil),           // 8: trainmesh.v1.Model
+	(*Dataset)(nil),         // 9: trainmesh.v1.Dataset
+	(*Optimizer)(nil),       // 10: trainmesh.v1.Optimizer
+	(*Batch)(nil),           // 11: trainmesh.v1.Batch
+	(*Checkpoint)(nil),      // 12: trainmesh.v1.Checkpoint
+	(*Validation)(nil),      // 13: trainmesh.v1.Validation
+	(*structpb.Struct)(nil), // 14: google.protobuf.Struct
 }
 var file_trainmesh_v1_jobspec_proto_depIdxs = []int32{
 	1,  // 0: trainmesh.v1.JobSpec.cluster:type_name -> trainmesh.v1.Cluster
 	2,  // 1: trainmesh.v1.JobSpec.run:type_name -> trainmesh.v1.Run
 	3,  // 2: trainmesh.v1.JobSpec.execution:type_name -> trainmesh.v1.Execution
-	6,  // 3: trainmesh.v1.JobSpec.training:type_name -> trainmesh.v1.Training
-	13, // 4: trainmesh.v1.JobSpec.planner:type_name -> google.protobuf.Struct
-	4,  // 5: trainmesh.v1.Execution.backend:type_name -> trainmesh.v1.Backend
-	5,  // 6: trainmesh.v1.Execution.rendezvous:type_name -> trainmesh.v1.Rendezvous
-	7,  // 7: trainmesh.v1.Training.model:type_name -> trainmesh.v1.Model
-	8,  // 8: trainmesh.v1.Training.dataset:type_name -> trainmesh.v1.Dataset
-	9,  // 9: trainmesh.v1.Training.optimizer:type_name -> trainmesh.v1.Optimizer
-	10, // 10: trainmesh.v1.Training.batch:type_name -> trainmesh.v1.Batch
-	11, // 11: trainmesh.v1.Training.checkpoint:type_name -> trainmesh.v1.Checkpoint
-	12, // 12: trainmesh.v1.Training.validation:type_name -> trainmesh.v1.Validation
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	7,  // 3: trainmesh.v1.JobSpec.training:type_name -> trainmesh.v1.Training
+	14, // 4: trainmesh.v1.JobSpec.planner:type_name -> google.protobuf.Struct
+	5,  // 5: trainmesh.v1.Execution.backend:type_name -> trainmesh.v1.Backend
+	6,  // 6: trainmesh.v1.Execution.rendezvous:type_name -> trainmesh.v1.Rendezvous
+	4,  // 7: trainmesh.v1.Execution.diloco:type_name -> trainmesh.v1.Diloco
+	8,  // 8: trainmesh.v1.Training.model:type_name -> trainmesh.v1.Model
+	9,  // 9: trainmesh.v1.Training.dataset:type_name -> trainmesh.v1.Dataset
+	10, // 10: trainmesh.v1.Training.optimizer:type_name -> trainmesh.v1.Optimizer
+	11, // 11: trainmesh.v1.Training.batch:type_name -> trainmesh.v1.Batch
+	12, // 12: trainmesh.v1.Training.checkpoint:type_name -> trainmesh.v1.Checkpoint
+	13, // 13: trainmesh.v1.Training.validation:type_name -> trainmesh.v1.Validation
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_trainmesh_v1_jobspec_proto_init() }
@@ -1058,14 +1192,15 @@ func file_trainmesh_v1_jobspec_proto_init() {
 		return
 	}
 	file_trainmesh_v1_jobspec_proto_msgTypes[2].OneofWrappers = []any{}
-	file_trainmesh_v1_jobspec_proto_msgTypes[11].OneofWrappers = []any{}
+	file_trainmesh_v1_jobspec_proto_msgTypes[4].OneofWrappers = []any{}
+	file_trainmesh_v1_jobspec_proto_msgTypes[12].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_trainmesh_v1_jobspec_proto_rawDesc), len(file_trainmesh_v1_jobspec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

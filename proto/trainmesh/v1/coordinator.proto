@@ -89,6 +89,8 @@ message Directive {
 
 // Run node `node_rank` of a job: torchrun --nnodes=machines --node_rank=node_rank
 // --nproc_per_node=ranks_per_machine --master_addr --master_port with config_yaml.
+// For strategy=diloco, machines/node_rank/master_* describe this node's island only, and
+// island_peers lists every island leader's tmcomm endpoint.
 message StartAssignment {
   string job_id = 1;
   int32 node_rank = 2;
@@ -97,6 +99,18 @@ message StartAssignment {
   string master_addr = 5;
   int32 master_port = 6;
   bytes config_yaml = 7;
+  int32 island = 8;
+  repeated IslandPeer island_peers = 9;
+  // Port the island leader's tmcomm listens on (on the node's advertised address).
+  int32 tmcomm_port = 10;
+}
+
+message IslandPeer {
+  int32 island = 1;
+  // host:port of the island leader's tmcomm listener.
+  string address = 2;
+  // The leader's node ID: its certificate's DNS name.
+  string name = 3;
 }
 
 message CancelAssignment {
@@ -155,9 +169,11 @@ message SubmitJobResponse {
 
 message Assignment {
   string node_id = 1;
+  // Within the node's island.
   int32 node_rank = 2;
   string state = 3;
   string message = 4;
+  int32 island = 5;
 }
 
 message Job {
@@ -176,6 +192,22 @@ message Job {
   repeated int32 rank_batch_sizes = 12;
   // Collective backend the planner chose: gloo or nccl.
   string communication = 13;
+  // data_parallel or diloco.
+  string strategy = 14;
+  // One island for data_parallel; workers / machines_per_island for diloco.
+  repeated JobIsland islands = 15;
+  // Islands that must finish for the job to succeed.
+  int32 min_islands = 16;
+}
+
+message JobIsland {
+  int32 index = 1;
+  string master_addr = 2;
+  int32 master_port = 3;
+  repeated string node_ids = 4;
+  string tmcomm_address = 5;
+  // RUNNING, SUCCEEDED or FAILED.
+  string state = 6;
 }
 
 message GetJobRequest {

@@ -71,6 +71,16 @@ def all_reduce_sum_(tensor: torch.Tensor, ctx: DistContext) -> torch.Tensor:
     return tensor
 
 
+def broadcast_(tensor: torch.Tensor, ctx: DistContext, src: int = 0) -> torch.Tensor:
+    """In-place broadcast of a CPU tensor, staged through the collective device if needed."""
+    if ctx.is_distributed:
+        buffer = tensor.to(ctx.collective_device)
+        dist.broadcast(buffer, src=src)
+        if buffer is not tensor:
+            tensor.copy_(buffer)
+    return tensor
+
+
 def max_across_ranks(value: float, ctx: DistContext) -> float:
     tensor = torch.tensor([value], dtype=torch.float64, device=ctx.collective_device)
     if ctx.is_distributed:

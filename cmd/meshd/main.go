@@ -24,7 +24,8 @@ func main() {
 	heartbeat := flag.Duration("heartbeat-interval", coordinator.DefaultHeartbeatInterval, "how often agents heartbeat")
 	suspect := flag.Duration("suspect-after", coordinator.DefaultSuspectAfter, "missing heartbeats for this long marks a node DEGRADED")
 	lost := flag.Duration("lost-after", coordinator.DefaultLostAfter, "missing heartbeats for this long marks a node LOST and fails its job")
-	rendezvousPort := flag.Int("rendezvous-port", coordinator.DefaultRendezvousPort, "TCP port node rank 0 uses for torchrun rendezvous")
+	rendezvousPort := flag.Int("rendezvous-port", coordinator.DefaultRendezvousPort, "TCP port node rank 0 uses for torchrun rendezvous (island k of a diloco job: + k)")
+	tmcommPort := flag.Int("tmcomm-port", coordinator.DefaultTmcommPort, "TCP port a diloco island leader's tmcomm listens on (island k: + k)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -40,6 +41,7 @@ func main() {
 			HeartbeatInterval: *heartbeat,
 			Liveness:          membership.LivenessPolicy{SuspectAfter: *suspect, LostAfter: *lost},
 			RendezvousPort:    *rendezvousPort,
+			TmcommPort:        *tmcommPort,
 		},
 	})
 	if err != nil {

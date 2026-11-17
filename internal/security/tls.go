@@ -82,6 +82,10 @@ func verifyAgainstCA(ca *x509.Certificate) func(tls.ConnectionState) error {
 		if err != nil {
 			return fmt.Errorf("coordinator certificate not issued by the cluster CA: %w", err)
 		}
+		leaf := state.PeerCertificates[0].Subject
+		if leaf.CommonName != CoordinatorCommonName || len(leaf.OrganizationalUnit) > 0 {
+			return fmt.Errorf("certificate %q (roles %v) belongs to a cluster member, not the coordinator", leaf.CommonName, leaf.OrganizationalUnit)
+		}
 		return nil
 	}
 }

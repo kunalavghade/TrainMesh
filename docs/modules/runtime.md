@@ -11,6 +11,7 @@
 | `devices.py` | Device, precision and collective backend for this rank ([devices.md](devices.md)) |
 | `sync.py` | Gradient sync: DDP, or one flattened all-reduce (staged through host memory for MPS) |
 | `balance.py` | Throughput balancing: largest-remainder split, per-epoch re-split from median step time |
+| `diloco.py` | DiLoCo outer loop: anchor weights, pseudo-gradients through `tmcomm`, Nesterov outer step ([diloco.md](diloco.md)) |
 | `data.py` | Deterministic `synthetic` / `teacher` datasets; `GlobalBatchSampler` (same global batches for any split), batched loaders |
 | `runtime.py` | The trainer: build, train epochs, validate, checkpoint, report |
 | `evaluation.py` | Validation loss and accuracy, reduced across ranks |
@@ -72,6 +73,7 @@
 | `dataset_type` | `synthetic` or `teacher` |
 | `device`, `precision`, `collective_backend`, `gradient_sync` | What rank 0 resolved |
 | `balance`, `rank_batch_sizes`, `balance_history`, `ranks`, `compute_imbalance`, `mixed_devices`, `max_parameter_drift` | Per-rank devices, splits and timings ([devices.md](devices.md)) |
+| `strategy`, `compute_utilization`, `diloco` | Strategy; compute ÷ (compute + communication), `null` under DDP; outer-round statistics ([diloco.md](diloco.md)) |
 | `validation` | `null`, or `{samples, final_loss, final_accuracy, accuracy_history, loss_history}` |
 
 ## Checkpoint format v2 (`checkpoint.py`)

@@ -26,6 +26,22 @@ jobs:
           version: v2.13
       - run: go test -race -count=1 ./...
 
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features python -- -D warnings
+      - run: cargo test
+
   python:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -39,6 +55,8 @@ jobs:
         run: |
           uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --python .venv/bin/python -e 'python[dev]'
+      - name: Build the tmcomm extension
+        run: cd native/tmcomm && VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv ../../.venv/bin/maturin develop --release --uv
       - run: .venv/bin/ruff check python scripts
       - run: .venv/bin/black --check python scripts
       - run: PYTHONPATH=python:scripts/e2e .venv/bin/python -m pytest python/tests scripts/e2e -q
@@ -46,7 +64,7 @@ jobs:
   e2e:
     # Linux only: GitHub's macOS runner takes 35 s per reverse DNS lookup, which stalls torchrun.
     runs-on: ubuntu-latest
-    needs: [go, python]
+    needs: [go, python, rust]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,6 +76,13 @@ jobs:
         run: |
           uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --python .venv/bin/python -e 'python[dev]'
+      - name: Build the tmcomm extension
+        run: cd native/tmcomm && VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv ../../.venv/bin/maturin develop --release --uv
       - run: scripts/e2e/local.sh
       - name: Mesh end to end (meshd + 2 tm-agents)
         run: scripts/e2e/mesh-local.sh
+      - name: DiLoCo over an emulated WAN (tc netem, 3 islands, root island killed)
+        run: |
+          sudo modprobe sch_netem || true
+          TC="sudo tc" TRAINMESH_BIN=$GITHUB_WORKSPACE/bin TRAINMESH_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python \
+            scripts/e2e/wan.sh

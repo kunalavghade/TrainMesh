@@ -150,8 +150,8 @@ func (s *Server) ReportAssignment(ctx context.Context, req *trainmeshv1.ReportAs
 			return nil // duplicate or late report; already settled
 		}
 		assignment.State, assignment.Message = reported, req.GetMessage()
-		if reported == store.JobSucceeded && assignment.NodeRank == 0 {
-			job.Result = req.GetResultJson()
+		if reported == store.JobSucceeded && keepsResult(&job, *assignment) {
+			job.Result, job.ResultIsland = req.GetResultJson(), assignment.Island
 		}
 		settleJob(&job, *assignment, now)
 		if err := finishPending(tx, &job); err != nil {
@@ -234,9 +234,14 @@ func (s *Server) SubmitJob(_ context.Context, req *trainmeshv1.SubmitJobRequest)
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
 		job.ConfigYAML, job.Communication, job.RankBatchSizes = planned.configYAML, planned.communication, planned.rankBatchSizes
-		job.MasterAddr = planned.nodes[0].Address
-		for rank, node := range planned.nodes {
-			job.Assignments = append(job.Assignments, store.Assignment{NodeID: node.ID, NodeRank: rank, State: store.JobPending})
+		job.Strategy = parsed.Spec.GetExecution().GetStrategy()
+		job.Islands, job.MinIslands = formIslands(parsed.Spec, planned.nodes, islandPorts{rendezvous: s.cfg.RendezvousPort, tmcomm: s.cfg.TmcommPort})
+		job.MasterAddr, job.MasterPort = job.Islands[0].MasterAddr, job.Islands[0].MasterPort
+		perIsland := len(planned.nodes) / len(job.Islands)
+		for position, node := range planned.nodes {
+			job.Assignments = append(job.Assignments, store.Assignment{
+				NodeID: node.ID, Island: position / perIsland, NodeRank: position % perIsland, State: store.JobPending,
+			})
 			if node.State, err = membership.Transition(node.State, membership.StateBusy); err != nil {
 				return err
 			}
@@ -250,7 +255,7 @@ func (s *Server) SubmitJob(_ context.Context, req *trainmeshv1.SubmitJobRequest)
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	s.logger.Info("job submitted", "job", job.ID, "machines", machines, "master", job.MasterAddr,
+	s.logger.Info("job submitted", "job", job.ID, "strategy", job.Strategy, "machines", machines, "islands", len(job.Islands), "master", job.MasterAddr,
 		"communication", job.Communication, "rank_batch_sizes", job.RankBatchSizes)
 	return &trainmeshv1.SubmitJobResponse{JobId: job.ID}, nil
 }
@@ -380,9 +385,11 @@ func directivesFor(job store.Job, nodeID string) []*trainmeshv1.Directive {
 	if !ok || assignment.State.Terminal() {
 		return nil
 	}
-	if job.State.Terminal() {
+	if job.State.Terminal() || islandHasFailed(&job, assignment.Island) {
 		reason := job.Error
-		if reason == "" {
+		if reason == "" && !job.State.Terminal() {
+			reason = fmt.Sprintf("island %d failed", assignment.Island)
+		} else if reason == "" {
 			reason = "job " + string(job.State)
 		}
 		return []*trainmeshv1.Directive{{Kind: &trainmeshv1.Directive_Cancel{Cancel: &trainmeshv1.CancelAssignment{JobId: job.ID, Reason: reason}}}}
@@ -390,7 +397,7 @@ func directivesFor(job store.Job, nodeID string) []*trainmeshv1.Directive {
 	if assignment.State != store.JobPending {
 		return nil
 	}
-	return []*trainmeshv1.Directive{{Kind: &trainmeshv1.Directive_Start{Start: &trainmeshv1.StartAssignment{
+	start := &trainmeshv1.StartAssignment{
 		JobId:           job.ID,
 		NodeRank:        toInt32(assignment.NodeRank),
 		Machines:        toInt32(job.Machines),
@@ -398,27 +405,16 @@ func directivesFor(job store.Job, nodeID string) []*trainmeshv1.Directive {
 		MasterAddr:      job.MasterAddr,
 		MasterPort:      toInt32(job.MasterPort),
 		ConfigYaml:      job.ConfigYAML,
-	}}}}
-}
-
-// settleJob moves the job forward after one assignment changed.
-func settleJob(job *store.Job, changed store.Assignment, now time.Time) {
-	if job.State.Terminal() {
-		return
+		Island:          toInt32(assignment.Island),
+		IslandPeers:     islandPeers(&job),
 	}
-	switch changed.State {
-	case store.JobFailed, store.JobCancelled:
-		job.State = store.JobFailed
-		job.Error = fmt.Sprintf("node %s (rank %d) %s: %s", changed.NodeID, changed.NodeRank, changed.State, changed.Message)
-		job.FinishedAt = now
-	case store.JobSucceeded:
-		for _, assignment := range job.Assignments {
-			if assignment.State != store.JobSucceeded {
-				return
-			}
-		}
-		job.State, job.FinishedAt = store.JobSucceeded, now
+	if len(job.Islands) > 0 { // jobs stored before islands existed use the job-level fields
+		island := job.Islands[assignment.Island]
+		start.Machines = toInt32(len(island.NodeIDs))
+		start.MasterAddr, start.MasterPort = island.MasterAddr, toInt32(island.MasterPort)
+		start.TmcommPort = toInt32(island.TmcommPort)
 	}
+	return []*trainmeshv1.Directive{{Kind: &trainmeshv1.Directive_Start{Start: start}}}
 }
 
 func releaseNode(tx store.Tx, nodeID, jobID string) error {
@@ -451,19 +447,25 @@ func failJobForLostNode(tx store.Tx, node store.Node, now time.Time) error {
 	return tx.PutJob(job)
 }
 
-// finishPending settles assignments that never started once the job has ended and frees their
-// nodes. Without it a node whose start directive lost the race with a failure stays BUSY forever:
-// it would only ever be told to cancel a job it never started.
+// finishPending settles assignments that never started once their job or island has ended and
+// frees their nodes. Without it a node whose start directive lost the race with a failure stays
+// BUSY forever: it would only ever be told to cancel a job it never started.
 func finishPending(tx store.Tx, job *store.Job) error {
-	if !job.State.Terminal() {
-		return nil
-	}
+	states := islandStates(job)
 	for i := range job.Assignments {
 		assignment := &job.Assignments[i]
 		if assignment.State != store.JobPending {
 			continue
 		}
-		assignment.State, assignment.Message = store.JobCancelled, "job ended before this node started"
+		reason := "job ended before this node started"
+		switch {
+		case job.State.Terminal():
+		case states[assignment.Island] == islandFailed:
+			reason = fmt.Sprintf("island %d failed before this node started", assignment.Island)
+		default:
+			continue
+		}
+		assignment.State, assignment.Message = store.JobCancelled, reason
 		if err := releaseNode(tx, assignment.NodeID, job.ID); err != nil {
 			return err
 		}

@@ -43,7 +43,7 @@ class Run(_message.Message):
     def __init__(self, name: _Optional[str] = ..., seed: _Optional[int] = ..., resume: _Optional[str] = ..., results_path: _Optional[str] = ...) -> None: ...
 
 class Execution(_message.Message):
-    __slots__ = ("strategy", "workers", "processes_per_worker", "cpu_threads_per_rank", "backend", "rendezvous", "gradient_sync")
+    __slots__ = ("strategy", "workers", "processes_per_worker", "cpu_threads_per_rank", "backend", "rendezvous", "gradient_sync", "diloco")
     STRATEGY_FIELD_NUMBER: _ClassVar[int]
     WORKERS_FIELD_NUMBER: _ClassVar[int]
     PROCESSES_PER_WORKER_FIELD_NUMBER: _ClassVar[int]
@@ -51,6 +51,7 @@ class Execution(_message.Message):
     BACKEND_FIELD_NUMBER: _ClassVar[int]
     RENDEZVOUS_FIELD_NUMBER: _ClassVar[int]
     GRADIENT_SYNC_FIELD_NUMBER: _ClassVar[int]
+    DILOCO_FIELD_NUMBER: _ClassVar[int]
     strategy: str
     workers: int
     processes_per_worker: int
@@ -58,7 +59,26 @@ class Execution(_message.Message):
     backend: Backend
     rendezvous: Rendezvous
     gradient_sync: str
-    def __init__(self, strategy: _Optional[str] = ..., workers: _Optional[int] = ..., processes_per_worker: _Optional[int] = ..., cpu_threads_per_rank: _Optional[int] = ..., backend: _Optional[_Union[Backend, _Mapping]] = ..., rendezvous: _Optional[_Union[Rendezvous, _Mapping]] = ..., gradient_sync: _Optional[str] = ...) -> None: ...
+    diloco: Diloco
+    def __init__(self, strategy: _Optional[str] = ..., workers: _Optional[int] = ..., processes_per_worker: _Optional[int] = ..., cpu_threads_per_rank: _Optional[int] = ..., backend: _Optional[_Union[Backend, _Mapping]] = ..., rendezvous: _Optional[_Union[Rendezvous, _Mapping]] = ..., gradient_sync: _Optional[str] = ..., diloco: _Optional[_Union[Diloco, _Mapping]] = ...) -> None: ...
+
+class Diloco(_message.Message):
+    __slots__ = ("inner_steps", "outer_learning_rate", "outer_momentum", "compression", "machines_per_island", "min_islands", "round_timeout_seconds")
+    INNER_STEPS_FIELD_NUMBER: _ClassVar[int]
+    OUTER_LEARNING_RATE_FIELD_NUMBER: _ClassVar[int]
+    OUTER_MOMENTUM_FIELD_NUMBER: _ClassVar[int]
+    COMPRESSION_FIELD_NUMBER: _ClassVar[int]
+    MACHINES_PER_ISLAND_FIELD_NUMBER: _ClassVar[int]
+    MIN_ISLANDS_FIELD_NUMBER: _ClassVar[int]
+    ROUND_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    inner_steps: int
+    outer_learning_rate: float
+    outer_momentum: float
+    compression: str
+    machines_per_island: int
+    min_islands: int
+    round_timeout_seconds: float
+    def __init__(self, inner_steps: _Optional[int] = ..., outer_learning_rate: _Optional[float] = ..., outer_momentum: _Optional[float] = ..., compression: _Optional[str] = ..., machines_per_island: _Optional[int] = ..., min_islands: _Optional[int] = ..., round_timeout_seconds: _Optional[float] = ...) -> None: ...
 
 class Backend(_message.Message):
     __slots__ = ("device", "communication")

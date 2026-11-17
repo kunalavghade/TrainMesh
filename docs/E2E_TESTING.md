@@ -10,6 +10,7 @@ use mocks.
 | 1c. Mixed devices | `make e2e-devices-local` | An mps agent and a cpu agent on one Apple Silicon Mac: profiles and islands reported, one job across both devices reaches the same model as 1 CPU machine, `balance: throughput` ends balanced | No (needs MPS; skips elsewhere) |
 | 2. minikube multi-node | `make e2e-minikube` | Training across 2 kubernetes nodes reaches the same model as 1 node (torchrun started by Kubernetes); measures overhead | No (needs Docker + minikube) |
 | 2b. minikube mesh | `make e2e-minikube-mesh` | `meshd` + one `tm-agent` pod per kubernetes node; the Phase 1 path over a real pod network | No (needs Docker + minikube) |
+| 4. WAN (DiLoCo) | `make e2e-wan` (Docker) or `scripts/e2e/wan.sh` (Linux with tc) | 3 islands over tc netem (50 ms RTT, 100 Mbit/s): data_parallel vs diloco at equal samples (accuracy, wall time, bytes, utilization), then the root island is killed and the job still succeeds | Yes (`e2e` job, `sudo tc` on the runner) |
 | 3. Physical machines | `scripts/e2e/manual-node.sh`, or `meshd` + `tm-agent` as in [modules/mesh.md](modules/mesh.md) | Real 1-machine vs multi-machine speed over your network | No (manual) |
 
 Levels 2 and 3 with `manual-node.sh` start `torchrun` directly, testing the runtime and the
@@ -239,6 +240,50 @@ It found that the loader took 3–4 ms per 1024-sample batch (more than the mode
 device difference) and that per-epoch totals were too noisy to re-split on. Both were fixed (see
 [modules/devices.md](modules/devices.md)).
 
+## Level 4 — DiLoCo over an emulated WAN (Phase 3)
+
+```bash
+make e2e-wan    # = scripts/e2e/wan-docker.sh: builds the image, runs wan.sh inside it
+```
+
+macOS has no `tc netem`, so `wan-docker.sh` runs everything in one Linux container
+(`deploy/docker/wan.Dockerfile`: runtime image + tmcomm wheel built in a Rust stage + iproute2 +
+cross-compiled Go binaries) started with `--cap-add NET_ADMIN`. It first checks the Docker VM has
+room (the VM is shared with other containers) and caps the container at 1800 MiB, so an overrun
+is killed inside the test container only. On Linux (and in CI) `wan.sh` runs directly with
+`TC="sudo tc"`.
+
+`wan.sh`: shapes loopback with `tc qdisc ... netem delay 25ms rate 100mbit` and measures the
+result; starts `meshd` and 3 cpu agents (one island each) over the shaped link; trains the same
+model (MLP 64-1024-10, 76,810 parameters) on the same 98,304 teacher samples × 3 epochs twice:
+`data_parallel` (gradient all-reduce every step, 3 × 512 per step; `gradient_sync: allreduce` so
+its waiting is measured rather than hidden inside DDP's backward) and `diloco` (H = 64, int8).
+Then a 6-epoch diloco job loses island 0 — the tmcomm root — after its first round (agent and
+training process `kill -9`). `wan_report.py` requires: both ≥ 85% accuracy; diloco within 2
+points of data_parallel; identical model hashes on all islands; diloco faster; diloco compute
+utilization ≥ 60%; the killed job SUCCEEDED with islands `[FAILED, SUCCEEDED, SUCCEEDED]` and
+the last round's members `[1, 2]`.
+
+Measured on the development Mac's Docker VM (2026-11-17, linux/arm64, 1 CPU thread per rank),
+`benchmark-results/e2e/wan-20261117-113656/`:
+
+| | data_parallel (sync every step) | diloco (H = 64, int8) |
+|---|---|---|
+| Link | measured RTT 52 ms, 72 Mbit/s | same |
+| Wall time | 49.2 s | **1.3 s (37×)** |
+| Bytes between machines | 236 MB (ring all-reduce, fp32) | **0.9 MB (255× less)** |
+| Compute utilization | 3% | **69%** |
+| Validation accuracy / final loss | 95.21% / 0.2116 | 96.19% / 0.1418 |
+
+Root island killed mid-run: job SUCCEEDED, islands `[FAILED, SUCCEEDED, SUCCEEDED]`, islands 1
+and 2 elected island 1 as root and finished with members `[1, 2]` at 97.27% accuracy.
+
+How to read this: the model is tiny, so per-step all-reduce over a 50 ms link is almost all
+waiting; DiLoCo's advantage grows with RTT and shrinks with compute per step. The accuracy here
+is from 3 rounds on a simple task, so "DiLoCo matches data_parallel" holds for this workload, not
+in general — the DiLoCo paper reports a small loss gap at large scale. Loopback shaping puts all
+three islands behind one shared 100 Mbit/s queue, which is stricter than three separate links.
+
 ## Level 2b — minikube mesh (Phase 1)
 
 ```bash
@@ -289,4 +334,5 @@ marks it LOST. Not run yet: no second physical machine was available.
 - CUDA, NCCL and ROCm: written and unit-tested, never run (no NVIDIA/AMD GPU available).
 - Balancing between genuinely different machines (e.g. a GPU PC and a CPU box): level 1c runs
   both agents on one Mac.
-- WAN conditions (`tc netem` latency/bandwidth emulation is planned).
+- Real WAN and NAT: level 4 emulates latency and bandwidth on one host; machines behind NAT
+  cannot reach each other's tmcomm port yet (no hole punching or relay).

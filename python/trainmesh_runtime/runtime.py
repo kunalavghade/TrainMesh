@@ -9,6 +9,7 @@ import os
 import random
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from .checkpoint import Progress, load_checkpoint, save_checkpoint
 from .config import TrainingSettings, load_config, to_dict, training_settings
 from .data import Batches, build_train_loader, build_validation_loader, rank_batch_sizes
 from .devices import DeviceChoice
+from .diloco import OuterLoop, island_setup
 from .distributed import (
     DistContext,
     all_gather_fixed,
@@ -34,6 +36,7 @@ from .distributed import (
     init_process_group,
     max_across_ranks,
 )
+from .errors import ConfigError
 from .evaluation import ValidationResult, evaluate
 from .sync import GradientSync, broadcast_parameters, choose_sync, max_parameter_drift
 
@@ -47,6 +50,7 @@ OPTIMIZER_FACTORIES: dict[str, type[torch.optim.Optimizer]] = {
 }
 LATEST_CHECKPOINT = "latest"
 DEFAULT_THREADS_PER_RANK = 1
+STRATEGY_DILOCO = "diloco"
 BALANCE_UNIFORM = "uniform"
 BALANCE_THROUGHPUT = "throughput"
 KIND_NAMES = {code: kind for kind, code in devices.DEVICE_KIND_CODES.items()}
@@ -115,8 +119,13 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     plan: StepPlan,
+    after_step: Callable[[], float] | None = None,
 ) -> EpochStats:
-    """Run one epoch; gradients are synchronized once per optimizer step."""
+    """Run one epoch; gradients are synchronized once per optimizer step.
+
+    `after_step` runs after every optimizer step (DiLoCo's outer round) and returns the seconds it
+    spent communicating, which count as sync time, not compute.
+    """
     model.train()
     optimizer.zero_grad(set_to_none=True)
     # MPS has no float64; the per-epoch sum fits float32 comfortably.
@@ -146,6 +155,10 @@ def train_epoch(
             _optimizer_step(optimizer, plan)
             optimizer_steps += 1
             pending = 0
+            if after_step is not None:
+                outer_seconds = after_step()
+                step_sync += outer_seconds
+                sync_seconds += outer_seconds
             now = time.perf_counter()
             step_compute.append(now - step_started - step_sync)
             step_started = now
@@ -212,13 +225,25 @@ def _run_job(
         uneven_batches=len(set(sizes)) > 1 or rebalancing,
         group_device_kinds=device_kinds,
     )
-    loader = build_train_loader(settings, ctx)
+    setup = island_setup(settings.diloco) if settings.strategy == STRATEGY_DILOCO else None
+    if setup is not None and resume_path:
+        raise ConfigError(
+            "resuming a diloco job is not supported yet: the outer weights and momentum are not "
+            "checkpointed (Phase 5)"
+        )
+    loader = build_train_loader(
+        settings,
+        ctx,
+        island=setup.island if setup else 0,
+        islands=setup.islands if setup else 1,
+    )
     validation_loader = build_validation_loader(settings, ctx)
     model = sync.wrap(
         MLP(settings.input_size, settings.hidden_size, settings.output_size).to(choice.device)
     )
     optimizer = build_optimizer(model, settings)
     criterion = nn.CrossEntropyLoss(reduction="sum")
+    outer = OuterLoop(unwrap(model), settings.diloco, setup, ctx) if setup else None
     plan = StepPlan(
         device=choice.device,
         sync=sync,
@@ -248,7 +273,9 @@ def _run_job(
     balance_history: list[EpochBalance] = []
     for epoch in range(start_epoch, settings.epochs):
         loader.sampler.set_epoch(epoch)
-        stats = train_epoch(model, loader, optimizer, criterion, plan)
+        stats = train_epoch(
+            model, loader, optimizer, criterion, plan, outer.after_step if outer else None
+        )
         compute_seconds += stats.compute_seconds
         sync_seconds += stats.sync_seconds
         if rebalancing:
@@ -276,6 +303,8 @@ def _run_job(
             "samples": int(sample_total),
             "world_size": ctx.world_size,
         }
+        if setup is not None:
+            event["island"] = setup.island
         if validation_loader is not None:
             validation = evaluate(unwrap(model), validation_loader, ctx, choice.device)
             validation_history.append(validation)
@@ -293,6 +322,12 @@ def _run_job(
                 ctx=ctx,
             )
 
+    if outer is not None:
+        # The last round makes every island's model identical; score that model.
+        sync_seconds += outer.finish()
+        if validation_loader is not None and validation_history:
+            validation_history[-1] = evaluate(unwrap(model), validation_loader, ctx, choice.device)
+
     elapsed = max_across_ranks(time.perf_counter() - started, ctx)
     digest = model_digest(model)
     assert_replicas_identical(digest, ctx)
@@ -302,6 +337,7 @@ def _run_job(
         final_sizes[ctx.rank], compute_seconds, sync_seconds, choice, ctx
     )
     return {
+        "strategy": settings.strategy,
         "world_size": ctx.world_size,
         "rank": ctx.rank,
         "local_rank": ctx.local_rank,
@@ -326,9 +362,24 @@ def _run_job(
         "max_parameter_drift": max_drift,
         "ranks": rank_stats,
         "compute_imbalance": _imbalance(rank_stats),
+        "compute_utilization": _compute_utilization(compute_seconds, sync_seconds, sync, ctx),
+        "diloco": outer.summary() if outer else None,
         "dataset_type": settings.dataset_type,
         "validation": _validation_summary(validation_history),
     }
+
+
+def _compute_utilization(
+    compute_seconds: float, sync_seconds: float, sync: GradientSync, ctx: DistContext
+) -> float | None:
+    """Share of rank 0's training time spent computing rather than communicating.
+
+    None for distributed DDP: it all-reduces inside backward(), so communication cannot be told
+    apart from compute (use gradient_sync: allreduce to measure it).
+    """
+    if ctx.is_distributed and sync.name == "ddp":
+        return None
+    return compute_seconds / max(compute_seconds + sync_seconds, 1e-9)
 
 
 def _loss_divisor(plan: StepPlan, batch_length: int) -> float:

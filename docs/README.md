@@ -12,6 +12,8 @@ code changes, update the document that owns that topic.
 | [modules/launcher.md](modules/launcher.md) | How ranks are started, supervised and stopped | Launch behaviour changes |
 | [modules/runtime.md](modules/runtime.md) | The Python training runtime: data, DDP training, validation, checkpoints, results | Runtime changes |
 | [modules/devices.md](modules/devices.md) | Phase 2: devices, precision, collective backend, gradient sync for mixed devices, throughput profiles, planner and per-epoch batch re-split | Device, sync, probe, planner or balancing changes |
+| [modules/diloco.md](modules/diloco.md) | Phase 3: DiLoCo islands — how a job is split into islands, the outer loop, settings, failure and quorum rules | DiLoCo, island planning or job settlement changes |
+| [modules/tmcomm.md](modules/tmcomm.md) | Phase 3: the Rust `tmcomm` crate — codecs with error feedback, wire format, mTLS, the outer all-reduce with root failover, Python API | tmcomm changes |
 | [modules/mesh.md](modules/mesh.md) | The mesh: `meshd`, `tm-agent`, joining, liveness, job flow, failure handling, security, how to operate it | Coordinator, agent or security changes |
 | [CPU_BACKEND.md](CPU_BACKEND.md) | Installing and running on CPU (macOS and Linux), tuning, config changes per release | Setup or defaults change |
 | [E2E_TESTING.md](E2E_TESTING.md) | End-to-end tests and the 1-machine vs multi-machine proof (local, minikube, physical) | Tests or measured results change |

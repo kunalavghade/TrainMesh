@@ -238,6 +238,9 @@ func followJob(ctx context.Context, client trainmeshv1.CoordinatorServiceClient,
 func reportChanges(w io.Writer, job *trainmeshv1.Job, lastSeen map[string]string) {
 	if lastSeen["job"] != job.GetState() {
 		fmt.Fprintf(w, "[%s] %s on %d machine(s), master %s:%d, %s", job.GetId(), job.GetState(), job.GetMachines(), job.GetMasterAddr(), job.GetMasterPort(), job.GetCommunication())
+		if islands := len(job.GetIslands()); islands > 1 {
+			fmt.Fprintf(w, ", %s across %d islands (%d must finish)", job.GetStrategy(), islands, job.GetMinIslands())
+		}
 		if sizes := job.GetRankBatchSizes(); len(sizes) > 0 {
 			fmt.Fprintf(w, ", rank batches %v", sizes)
 		}
@@ -246,7 +249,11 @@ func reportChanges(w io.Writer, job *trainmeshv1.Job, lastSeen map[string]string
 	}
 	for _, a := range job.GetAssignments() {
 		if lastSeen[a.GetNodeId()] != a.GetState() {
-			fmt.Fprintf(w, "[%s]   %s (node rank %d): %s %s\n", job.GetId(), a.GetNodeId(), a.GetNodeRank(), a.GetState(), a.GetMessage())
+			where := fmt.Sprintf("node rank %d", a.GetNodeRank())
+			if len(job.GetIslands()) > 1 {
+				where = fmt.Sprintf("island %d, node rank %d", a.GetIsland(), a.GetNodeRank())
+			}
+			fmt.Fprintf(w, "[%s]   %s (%s): %s %s\n", job.GetId(), a.GetNodeId(), where, a.GetState(), a.GetMessage())
 			lastSeen[a.GetNodeId()] = a.GetState()
 		}
 	}
@@ -283,11 +290,19 @@ func writeResult(stdout io.Writer, path string, result []byte) error {
 func jobSummary(job *trainmeshv1.Job) map[string]any {
 	assignments := make([]map[string]any, 0, len(job.GetAssignments()))
 	for _, a := range job.GetAssignments() {
-		assignments = append(assignments, map[string]any{"node": a.GetNodeId(), "node_rank": a.GetNodeRank(), "state": a.GetState(), "message": a.GetMessage()})
+		assignments = append(assignments, map[string]any{"node": a.GetNodeId(), "island": a.GetIsland(), "node_rank": a.GetNodeRank(), "state": a.GetState(), "message": a.GetMessage()})
+	}
+	islands := make([]map[string]any, 0, len(job.GetIslands()))
+	for _, island := range job.GetIslands() {
+		islands = append(islands, map[string]any{
+			"index": island.GetIndex(), "state": island.GetState(), "nodes": island.GetNodeIds(),
+			"master": fmt.Sprintf("%s:%d", island.GetMasterAddr(), island.GetMasterPort()), "tmcomm": island.GetTmcommAddress(),
+		})
 	}
 	summary := map[string]any{
-		"id": job.GetId(), "state": job.GetState(), "machines": job.GetMachines(), "ranks_per_machine": job.GetRanksPerMachine(),
+		"id": job.GetId(), "state": job.GetState(), "strategy": job.GetStrategy(), "machines": job.GetMachines(), "ranks_per_machine": job.GetRanksPerMachine(),
 		"master": fmt.Sprintf("%s:%d", job.GetMasterAddr(), job.GetMasterPort()), "assignments": assignments, "error": job.GetError(),
+		"islands": islands, "min_islands": job.GetMinIslands(), "communication": job.GetCommunication(), "rank_batch_sizes": job.GetRankBatchSizes(),
 	}
 	if len(job.GetResultJson()) > 0 {
 		summary["result"] = json.RawMessage(job.GetResultJson())
